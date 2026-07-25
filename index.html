@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Visual Odometry Tracker</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background: #121212;
+            color: white;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .container {
+            position: relative;
+            width: 100%;
+            max-width: 640px;
+        }
+        canvas {
+            width: 100%;
+            height: auto;
+            background: #222;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+        }
+        .hud {
+            margin-top: 20px;
+            background: #1e1e1e;
+            padding: 15px 20px;
+            border-radius: 8px;
+            width: 100%;
+            max-width: 600px;
+            display: flex;
+            justify-content: space-between;
+            box-sizing: border-box;
+            border: 1px solid #333;
+        }
+        .metric {
+            display: flex;
+            flex-direction: column;
+        }
+        .label {
+            font-size: 0.85rem;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .value {
+            font-size: 1.5rem;
+            font-weight: bold;
+            font-variant-numeric: tabular-nums;
+        }
+        #status {
+            margin-bottom: 10px;
+            color: #f39c12;
+        }
+        video {
+            display: none; /* Hide the raw video, we draw to canvas */
+        }
+    </style>
+</head>
+<body>
+
+    <div id="status">Loading OpenCV.js (may take a moment)...</div>
+
+    <div class="container">
+        <!-- Raw video feed -->
+        <video id="videoInput" width="640" height="480" autoplay playsinline></video>
+        <!-- Canvas to draw feed and tracked features -->
+        <canvas id="canvasOutput" width="640" height="480"></canvas>
+    </div>
+
+    <div class="hud">
+        <div class="metric">
+            <span class="label">Relative Azimuth (Yaw)</span>
+            <span class="value" id="azimuthVal">0.0</span>
+        </div>
+        <div class="metric">
+            <span class="label">Relative Elevation (Pitch)</span>
+            <span class="value" id="elevationVal">0.0</span>
+        </div>
+    </div>
+
+    <!-- Load OpenCV.js asynchronously -->
+    <script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="onOpenCvReady();" type="text/javascript"></script>
+
+    <script>
+        let video = document.getElementById('videoInput');
+        let canvas = document.getElementById('canvasOutput');
+        let ctx = canvas.getContext('2d');
+        let azimuthVal = document.getElementById('azimuthVal');
+        let elevationVal = document.getElementById('elevationVal');
+        let statusDiv = document.getElementById('status');
+
+        let azimuth = 0;
+        let elevation = 0;
+
+        function onOpenCvReady() {
+            statusDiv.innerText = "Requesting camera access...";
+            // Request camera
+            navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false })
+                .then(function(stream) {
+                    video.srcObject = stream;
+                    video.play();
+                    statusDiv.innerText = "Tracking Initialized";
+                    statusDiv.style.color = "#2ecc71";
+                    
+                    // Wait for video to be ready before processing
+                    video.addEventListener('canplay', startProcessing, {once: true});
+                })
+                .catch(function(err) {
+                    statusDiv.innerText = "Camera error: " + err;
+                    statusDiv.style.color = "#e74c3c";
+                });
+        }
+
+        function startProcessing() {
+            let cap = new cv.VideoCapture(video);
+            
+            // Matrices to hold frames
+            let oldFrame = new cv.Mat(video.height, video.width, cv.CV_8UC4);
+            let oldGray = new cv.Mat();
+            let newFrame = new cv.Mat(video.height, video.width, cv.CV_8UC4);
+            let newGray = new cv.Mat();
+            
+            // Matrices for points and status
+            let p0 = new cv.Mat();
+            let p1 = new cv.Mat();
+            let st = new cv.Mat();
+            let err = new cv.Mat();
+            
+            // Parameters for feature detection (Shi-Tomasi)
+            let maxCorners = 100;
+            let qualityLevel = 0.3;
+            let minDistance = 7;
+            let blockSize = 7;
+            let mask = new cv.Mat();
+            
+            // Parameters for optical flow (Lucas-Kanade)
+            let winSize = new cv.Size(15, 15);
+            let maxLevel = 2;
+            let criteria = new cv.TermCriteria(cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, 10, 0.03);
+            
+            let color = new cv.Scalar(0, 255, 0, 255); // Green points
+            let framesWithoutFeatures = 0;
+
+            // Grab first frame
+            cap.read(oldFrame);
+            cv.cvtColor(oldFrame, oldGray, cv.COLOR_RGBA2GRAY);
+            
+            // Initial feature detection
+            cv.goodFeaturesToTrack(oldGray, p0, maxCorners, qualityLevel, minDistance, mask, blockSize);
+
+            const FPS = 30;
+            function processVideo() {
+                try {
+                    if (!video.videoWidth) {
+                        requestAnimationFrame(processVideo);
+                        return;
+                    }
+
+                    // Read current frame
+                    cap.read(newFrame);
+                    cv.cvtColor(newFrame, newGray, cv.COLOR_RGBA2GRAY);
+
+                    // If we lost our tracking points, find new ones
+                    if (p0.rows < 20) {
+                        cv.goodFeaturesToTrack(oldGray, p0, maxCorners, qualityLevel, minDistance, mask, blockSize);
+                    }
+
+                    if (p0.rows > 0) {
+                        // Calculate optical flow
+                        cv.calcOpticalFlowPyrLK(oldGray, newGray, p0, p1, st, err, winSize, maxLevel, criteria);
+
+                        let goodNew = [];
+                        let goodOld = [];
+                        let dxSum = 0;
+                        let dySum = 0;
+                        let pointCount = 0;
+
+                        // Filter valid points and calculate movement
+                        for (let i = 0; i < st.rows; i++) {
+                            if (st.data[i] === 1) {
+                                let oldX = p0.data32F[i * 2];
+                                let oldY = p0.data32F[i * 2 + 1];
+                                let newX = p1.data32F[i * 2];
+                                let newY = p1.data32F[i * 2 + 1];
+
+                                goodNew.push(new cv.Point(newX, newY));
+                                goodOld.push(new cv.Point(oldX, oldY));
+
+                                // Calculate delta. If camera moves right (yaw), points move left on screen.
+                                // So we subtract new from old to get camera movement direction.
+                                dxSum += (oldX - newX);
+                                dySum += (oldY - newY);
+                                pointCount++;
+
+                                // Draw the tracking point
+                                cv.circle(newFrame, new cv.Point(newX, newY), 3, color, -1);
+                            }
+                        }
+
+                        // Update global azimuth and elevation
+                        if (pointCount > 0) {
+                            // Divide by point count to get average pixel shift
+                            azimuth += (dxSum / pointCount);
+                            elevation += (dySum / pointCount);
+                            
+                            azimuthVal.innerText = azimuth.toFixed(1);
+                            elevationVal.innerText = elevation.toFixed(1);
+                        }
+
+                        // Rebuild p0 for the next frame
+                        p0.delete();
+                        p0 = new cv.Mat(goodNew.length, 1, cv.CV_32FC2);
+                        for (let i = 0; i < goodNew.length; i++) {
+                            p0.data32F[i * 2] = goodNew[i].x;
+                            p0.data32F[i * 2 + 1] = goodNew[i].y;
+                        }
+                    }
+
+                    // Display frame
+                    cv.imshow('canvasOutput', newFrame);
+
+                    // Setup for next frame
+                    newGray.copyTo(oldGray);
+                    
+                    // Schedule next frame
+                    setTimeout(processVideo, 1000/FPS);
+
+                } catch (err) {
+                    console.error(err);
+                }
+            }
+
+            // Start loop
+            setTimeout(processVideo, 0);
+        }
+    </script>
+</body>
+</html>
