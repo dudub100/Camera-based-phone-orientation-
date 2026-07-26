@@ -22,7 +22,6 @@
             display: flex;
             justify-content: center;
         }
-        /* Keep canvas visually constrained, but let internal resolution map 1:1 */
         canvas {
             width: 100%;
             max-width: 640px;
@@ -136,7 +135,6 @@
             color: #f39c12;
             text-align: center;
         }
-        /* No hardcoded width/height on video to prevent DOM squashing */
         video { display: none; }
     </style>
 </head>
@@ -145,6 +143,7 @@
     <div id="status">Loading OpenCV.js (may take a moment)...</div>
 
     <div class="container">
+        <!-- Width and height are missing intentionally here to prevent squashing -->
         <video id="videoInput" autoplay playsinline></video>
         <canvas id="canvasOutput"></canvas>
     </div>
@@ -214,7 +213,7 @@
 
         let optAzimuth = 0;
         let optElevation = 0;
-        let baseLongEdgeFOV = 65.0; // Anchored to the longest side of the frame
+        let baseLongEdgeFOV = 65.0; 
 
         let rawSensAzimuth = 0;
         let rawSensElevation = 0;
@@ -359,7 +358,6 @@
             fovDisplay.innerText = `Base Long Edge: ~${baseLongEdgeFOV}°`;
 
             try {
-                // Request a reasonable target resolution to ensure smooth tracking
                 currentStream = await navigator.mediaDevices.getUserMedia({
                     video: { 
                         deviceId: { exact: deviceId },
@@ -397,17 +395,19 @@
                 
                 resetTracking = true;
 
-                if (!trackingStarted) {
-                    video.addEventListener('canplay', () => {
-                        // Dynamically scale canvas to match raw intrinsic stream perfectly
-                        canvas.width = video.videoWidth;
-                        canvas.height = video.videoHeight;
-                        if (!trackingStarted) {
-                            startProcessing();
-                            trackingStarted = true;
-                        }
-                    });
-                }
+                // FIX: Safely assign intrinsic dimensions to the HTML elements once loaded
+                video.onloadedmetadata = () => {
+                    video.width = video.videoWidth;
+                    video.height = video.videoHeight;
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    
+                    if (!trackingStarted) {
+                        startProcessing();
+                        trackingStarted = true;
+                    }
+                };
+
             } catch (err) {
                 statusDiv.innerText = "Error starting camera: " + err;
                 statusDiv.style.color = "#e74c3c";
@@ -415,9 +415,8 @@
         }
 
         function startProcessing() {
-            // Initialize Mats using dynamic true dimensions
-            let w = video.videoWidth;
-            let h = video.videoHeight;
+            let w = video.width;
+            let h = video.height;
             let oldFrame = new cv.Mat(h, w, cv.CV_8UC4);
             let oldGray = new cv.Mat();
             let newFrame = new cv.Mat(h, w, cv.CV_8UC4);
@@ -449,13 +448,17 @@
 
                     // Handle device rotation mid-stream: intrinsic dimensions changed
                     if (newFrame.cols !== video.videoWidth || newFrame.rows !== video.videoHeight) {
-                        oldFrame.delete(); newFrame.delete(); oldGray.delete(); newGray.delete();
-                        oldFrame = new cv.Mat(video.videoHeight, video.videoWidth, cv.CV_8UC4);
-                        newFrame = new cv.Mat(video.videoHeight, video.videoWidth, cv.CV_8UC4);
-                        oldGray = new cv.Mat();
-                        newGray = new cv.Mat();
+                        video.width = video.videoWidth;
+                        video.height = video.videoHeight;
                         canvas.width = video.videoWidth;
                         canvas.height = video.videoHeight;
+                        
+                        oldFrame.delete(); newFrame.delete(); oldGray.delete(); newGray.delete();
+                        oldFrame = new cv.Mat(video.height, video.width, cv.CV_8UC4);
+                        newFrame = new cv.Mat(video.height, video.width, cv.CV_8UC4);
+                        oldGray = new cv.Mat();
+                        newGray = new cv.Mat();
+                        
                         resetTracking = true;
                     }
 
@@ -510,16 +513,10 @@
                             let zoomSlider = document.getElementById('zoomSlider');
                             let currentZoom = parseFloat(zoomSlider ? zoomSlider.value : 1.0) || 1.0;
                             
-                            // Find the longest edge (Width in Landscape, Height in Portrait)
-                            let maxDimension = Math.max(video.videoWidth, video.videoHeight);
-                            
-                            // Calculate single baseline focal length from the longest edge
+                            let maxDimension = Math.max(video.width, video.height);
                             let f_px_base = (maxDimension / 2) / Math.tan((baseLongEdgeFOV / 2) * (Math.PI / 180));
-                            
-                            // Apply hardware zoom
                             let f_px = f_px_base * currentZoom;
                             
-                            // Because pixels are square, this Degrees-Per-Pixel applies to both X and Y
                             let degPerPixel = (180 / Math.PI) / f_px;
 
                             optAzimuth += (avgPxShiftX * degPerPixel);
