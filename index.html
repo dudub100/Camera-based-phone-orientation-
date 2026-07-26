@@ -147,14 +147,14 @@
 
     <div class="hud-container">
         <div class="hud-panel">
-            <div class="panel-title">Optical (Pixels)</div>
+            <div class="panel-title">Optical (Est. Degrees)</div>
             <div class="metric">
                 <span class="label">Azimuth (Yaw)</span>
-                <span class="value" id="optAzimuthVal">0.0</span>
+                <span class="value" id="optAzimuthVal">0.0°</span>
             </div>
             <div class="metric">
                 <span class="label">Elevation (Pitch)</span>
-                <span class="value" id="optElevationVal">0.0</span>
+                <span class="value" id="optElevationVal">0.0°</span>
             </div>
         </div>
 
@@ -204,8 +204,11 @@
         let sensAzimuthOffset = 0;
         let sensElevationOffset = 0;
 
+        // Base estimated Field of View for a standard mobile wide lens
+        const BASE_HFOV = 65.0; 
+        const BASE_VFOV = 51.0; 
+
         // --- MATRIX SENSOR LOGIC ---
-        
         function normalizeRelativeAngle(rawAngle, offset) {
             let diff = rawAngle - offset;
             while (diff > 180) diff -= 360;
@@ -216,7 +219,6 @@
         function handleOrientation(event) {
             if (event.alpha === null || event.beta === null || event.gamma === null) return;
             
-            // Convert degrees to radians
             let deg2rad = Math.PI / 180;
             let c1 = Math.cos(event.alpha * deg2rad);
             let s1 = Math.sin(event.alpha * deg2rad);
@@ -225,23 +227,17 @@
             let c3 = Math.cos(event.gamma * deg2rad);
             let s3 = Math.sin(event.gamma * deg2rad);
 
-            // Construct the W3C device-to-world rotation matrix (Only the Z-axis column)
-            // This mathematically defines the exact vector the back camera is pointing in 3D space
             let m13 = (c1 * s3) + (c3 * s1 * s2);
             let m23 = (s1 * s3) - (c1 * c3 * s2);
             let m33 = c2 * c3;
 
-            // Camera points in the -Z direction
             let lookX = -m13;
             let lookY = -m23;
             let lookZ = -m33;
 
-            // Extract perfect Elevation (Pitch) and Azimuth (Yaw) from the World Vector
-            // This eliminates Gimbal Lock and inherently solves Portrait/Landscape rotations
             rawSensElevation = Math.asin(lookZ) * (180 / Math.PI); 
             rawSensAzimuth = Math.atan2(lookX, lookY) * (180 / Math.PI); 
 
-            // Apply offsets for the zero button
             let displayAzimuth = normalizeRelativeAngle(rawSensAzimuth, sensAzimuthOffset);
             let displayElevation = rawSensElevation - sensElevationOffset;
 
@@ -267,12 +263,11 @@
         });
 
         // --- ZEROING LOGIC ---
-        
         zeroBtn.addEventListener('click', () => {
             optAzimuth = 0;
             optElevation = 0;
-            optAzimuthVal.innerText = "0.0";
-            optElevationVal.innerText = "0.0";
+            optAzimuthVal.innerText = "0.0°";
+            optElevationVal.innerText = "0.0°";
             
             sensAzimuthOffset = rawSensAzimuth;
             sensElevationOffset = rawSensElevation;
@@ -290,7 +285,6 @@
         });
 
         // --- CAMERA & OPENCV LOGIC ---
-
         function onOpenCvReady() {
             statusDiv.innerText = "Requesting camera permissions...";
             getCameras();
@@ -423,8 +417,8 @@
                         p0 = new cv.Mat();
                         optAzimuth = 0;
                         optElevation = 0;
-                        optAzimuthVal.innerText = "0.0";
-                        optElevationVal.innerText = "0.0";
+                        optAzimuthVal.innerText = "0.0°";
+                        optElevationVal.innerText = "0.0°";
                         
                         cap.read(oldFrame);
                         cv.cvtColor(oldFrame, oldGray, cv.COLOR_RGBA2GRAY);
@@ -453,10 +447,7 @@
 
                                 goodNew.push(new cv.Point(newX, newY));
 
-                                // Panning right (Yaw +): pixels move left (oldX > newX)
                                 dxSum += (oldX - newX);
-                                
-                                // Tilting up (Pitch +): pixels move down (newY > oldY)
                                 dySum += (newY - oldY);
                                 pointCount++;
 
@@ -465,11 +456,26 @@
                         }
 
                         if (pointCount > 0) {
-                            optAzimuth += (dxSum / pointCount);
-                            optElevation += (dySum / pointCount);
+                            // 1. Get average pixel shift
+                            let avgPxShiftX = dxSum / pointCount;
+                            let avgPxShiftY = dySum / pointCount;
+
+                            // 2. Adjust FOV based on current zoom level
+                            let zoomSlider = document.getElementById('zoomSlider');
+                            let currentZoom = parseFloat(zoomSlider ? zoomSlider.value : 1.0) || 1.0;
                             
-                            optAzimuthVal.innerText = optAzimuth.toFixed(1);
-                            optElevationVal.innerText = optElevation.toFixed(1);
+                            let effectiveHFOV = BASE_HFOV / currentZoom;
+                            let effectiveVFOV = BASE_VFOV / currentZoom;
+
+                            // 3. Convert Pixels to Degrees
+                            let degPerPixelX = effectiveHFOV / video.videoWidth;
+                            let degPerPixelY = effectiveVFOV / video.videoHeight;
+
+                            optAzimuth += (avgPxShiftX * degPerPixelX);
+                            optElevation += (avgPxShiftY * degPerPixelY);
+                            
+                            optAzimuthVal.innerText = optAzimuth.toFixed(1) + "°";
+                            optElevationVal.innerText = optElevation.toFixed(1) + "°";
                         }
 
                         p0.delete();
