@@ -19,9 +19,13 @@
             position: relative;
             width: 100%;
             max-width: 640px;
+            display: flex;
+            justify-content: center;
         }
+        /* Keep canvas visually constrained, but let internal resolution map 1:1 */
         canvas {
             width: 100%;
+            max-width: 640px;
             height: auto;
             background: #222;
             border-radius: 8px;
@@ -132,6 +136,7 @@
             color: #f39c12;
             text-align: center;
         }
+        /* No hardcoded width/height on video to prevent DOM squashing */
         video { display: none; }
     </style>
 </head>
@@ -140,8 +145,8 @@
     <div id="status">Loading OpenCV.js (may take a moment)...</div>
 
     <div class="container">
-        <video id="videoInput" width="640" height="480" autoplay playsinline></video>
-        <canvas id="canvasOutput" width="640" height="480"></canvas>
+        <video id="videoInput" autoplay playsinline></video>
+        <canvas id="canvasOutput"></canvas>
     </div>
 
     <div class="hw-controls">
@@ -156,7 +161,7 @@
         <div class="hud-panel">
             <div class="panel-title">
                 Optical (Static Lens)
-                <span class="live-fov" id="fovDisplay">Base HFOV: 65°</span>
+                <span class="live-fov" id="fovDisplay">Base FOV: 65°</span>
             </div>
             <div class="metric">
                 <span class="label">Azimuth (Yaw)</span>
@@ -209,13 +214,10 @@
 
         let optAzimuth = 0;
         let optElevation = 0;
-        let baseHFOV = 65.0; // Default assumption
+        let baseLongEdgeFOV = 65.0; // Anchored to the longest side of the frame
 
-        // Raw background hardware states
         let rawSensAzimuth = 0;
         let rawSensElevation = 0;
-        
-        // Zero-offsets for display
         let sensAzimuthOffset = 0;
         let sensElevationOffset = 0;
         let allVideoDevices = [];
@@ -344,23 +346,25 @@
                 currentStream.getTracks().forEach(t => t.stop());
             }
 
-            // Sniff camera label to set static FOV guess
             let selectedDevice = allVideoDevices.find(d => d.deviceId === deviceId);
             let label = selectedDevice ? selectedDevice.label.toLowerCase() : "";
             
             if (label.includes("ultra")) {
-                baseHFOV = 110.0;
+                baseLongEdgeFOV = 110.0;
             } else if (label.includes("tele")) {
-                baseHFOV = 30.0;
+                baseLongEdgeFOV = 30.0;
             } else {
-                baseHFOV = 65.0; // Standard Wide
+                baseLongEdgeFOV = 65.0; // Standard Wide
             }
-            
-            fovDisplay.innerText = `Base HFOV: ~${baseHFOV}°`;
+            fovDisplay.innerText = `Base Long Edge: ~${baseLongEdgeFOV}°`;
 
             try {
+                // Request a reasonable target resolution to ensure smooth tracking
                 currentStream = await navigator.mediaDevices.getUserMedia({
-                    video: { deviceId: { exact: deviceId } },
+                    video: { 
+                        deviceId: { exact: deviceId },
+                        width: { ideal: 640 }
+                    },
                     audio: false
                 });
                 video.srcObject = currentStream;
@@ -395,11 +399,14 @@
 
                 if (!trackingStarted) {
                     video.addEventListener('canplay', () => {
+                        // Dynamically scale canvas to match raw intrinsic stream perfectly
+                        canvas.width = video.videoWidth;
+                        canvas.height = video.videoHeight;
                         if (!trackingStarted) {
                             startProcessing();
                             trackingStarted = true;
                         }
-                    }, {once: true});
+                    });
                 }
             } catch (err) {
                 statusDiv.innerText = "Error starting camera: " + err;
@@ -408,10 +415,12 @@
         }
 
         function startProcessing() {
-            let cap = new cv.VideoCapture(video);
-            let oldFrame = new cv.Mat(video.height, video.width, cv.CV_8UC4);
+            // Initialize Mats using dynamic true dimensions
+            let w = video.videoWidth;
+            let h = video.videoHeight;
+            let oldFrame = new cv.Mat(h, w, cv.CV_8UC4);
             let oldGray = new cv.Mat();
-            let newFrame = new cv.Mat(video.height, video.width, cv.CV_8UC4);
+            let newFrame = new cv.Mat(h, w, cv.CV_8UC4);
             let newGray = new cv.Mat();
             
             let p0 = new cv.Mat();
@@ -438,6 +447,18 @@
                         return;
                     }
 
+                    // Handle device rotation mid-stream: intrinsic dimensions changed
+                    if (newFrame.cols !== video.videoWidth || newFrame.rows !== video.videoHeight) {
+                        oldFrame.delete(); newFrame.delete(); oldGray.delete(); newGray.delete();
+                        oldFrame = new cv.Mat(video.videoHeight, video.videoWidth, cv.CV_8UC4);
+                        newFrame = new cv.Mat(video.videoHeight, video.videoWidth, cv.CV_8UC4);
+                        oldGray = new cv.Mat();
+                        newGray = new cv.Mat();
+                        canvas.width = video.videoWidth;
+                        canvas.height = video.videoHeight;
+                        resetTracking = true;
+                    }
+
                     if (resetTracking) {
                         if (p0 != null) { try { p0.delete(); } catch(e) {} }
                         p0 = new cv.Mat();
@@ -446,6 +467,7 @@
                         optAzimuthVal.innerText = "0.0°";
                         optElevationVal.innerText = "0.0°";
                         
+                        cap = new cv.VideoCapture(video);
                         cap.read(oldFrame);
                         cv.cvtColor(oldFrame, oldGray, cv.COLOR_RGBA2GRAY);
                         resetTracking = false;
@@ -473,7 +495,6 @@
 
                                 goodNew.push(new cv.Point(newX, newY));
 
-                                // Directional Pixel Shift
                                 dxSum += (oldX - newX);
                                 dySum += (newY - oldY);
                                 pointCount++;
@@ -486,17 +507,19 @@
                             let avgPxShiftX = dxSum / pointCount;
                             let avgPxShiftY = dySum / pointCount;
 
-                            // Calculate mathematical focal length in pixels for square sensors
                             let zoomSlider = document.getElementById('zoomSlider');
                             let currentZoom = parseFloat(zoomSlider ? zoomSlider.value : 1.0) || 1.0;
                             
-                            // focal_length = (width / 2) / tan(FOV / 2)
-                            let f_px_base = (video.videoWidth / 2) / Math.tan((baseHFOV / 2) * (Math.PI / 180));
+                            // Find the longest edge (Width in Landscape, Height in Portrait)
+                            let maxDimension = Math.max(video.videoWidth, video.videoHeight);
                             
-                            // Apply hardware zoom to focal length
+                            // Calculate single baseline focal length from the longest edge
+                            let f_px_base = (maxDimension / 2) / Math.tan((baseLongEdgeFOV / 2) * (Math.PI / 180));
+                            
+                            // Apply hardware zoom
                             let f_px = f_px_base * currentZoom;
                             
-                            // Unified Degrees-Per-Pixel applied to both X and Y
+                            // Because pixels are square, this Degrees-Per-Pixel applies to both X and Y
                             let degPerPixel = (180 / Math.PI) / f_px;
 
                             optAzimuth += (avgPxShiftX * degPerPixel);
@@ -506,7 +529,6 @@
                             optElevationVal.innerText = optElevation.toFixed(1) + "°";
                         }
 
-                        // Rebuild array for next frame
                         p0.delete();
                         p0 = new cv.Mat(goodNew.length, 1, cv.CV_32FC2);
                         for (let i = 0; i < goodNew.length; i++) {
