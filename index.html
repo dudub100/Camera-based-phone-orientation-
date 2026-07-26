@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Visual Odometry Tracker</title>
+    <title>Visual vs Sensor Odometry</title>
     <style>
         body {
             font-family: system-ui, -apple-system, sans-serif;
@@ -27,35 +27,8 @@
             border-radius: 8px;
             box-shadow: 0 4px 12px rgba(0,0,0,0.5);
         }
-        .hud {
-            margin-top: 20px;
-            background: #1e1e1e;
-            padding: 15px 20px;
-            border-radius: 8px;
-            width: 100%;
-            max-width: 600px;
-            display: flex;
-            justify-content: space-between;
-            box-sizing: border-box;
-            border: 1px solid #333;
-        }
-        .metric {
-            display: flex;
-            flex-direction: column;
-        }
-        .label {
-            font-size: 0.85rem;
-            color: #888;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-        .value {
-            font-size: 1.5rem;
-            font-weight: bold;
-            font-variant-numeric: tabular-nums;
-        }
         
-        /* New Hardware Controls */
+        /* Hardware Controls */
         .hw-controls {
             margin-top: 15px;
             width: 100%;
@@ -73,7 +46,7 @@
             font-size: 1rem;
         }
         #zoomContainer {
-            display: none; /* Hidden by default until we confirm the camera supports zoom */
+            display: none;
             align-items: center;
             background: #333;
             padding: 0 15px;
@@ -81,27 +54,74 @@
             gap: 10px;
         }
 
+        /* Split HUD for Optical vs Sensor */
+        .hud-container {
+            width: 100%;
+            max-width: 600px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-top: 20px;
+        }
+        .hud-panel {
+            background: #1e1e1e;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #333;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        .panel-title {
+            font-size: 0.9rem;
+            color: #3498db;
+            font-weight: bold;
+            text-transform: uppercase;
+            border-bottom: 1px solid #333;
+            padding-bottom: 5px;
+            margin-bottom: 5px;
+        }
+        .metric {
+            display: flex;
+            flex-direction: column;
+        }
+        .label {
+            font-size: 0.8rem;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .value {
+            font-size: 1.4rem;
+            font-weight: bold;
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* Action Buttons */
         .controls {
-            margin-top: 15px;
+            margin-top: 20px;
             width: 100%;
             max-width: 600px;
             display: flex;
+            gap: 10px;
             justify-content: center;
         }
         button {
+            flex: 1;
             background: #3498db;
             color: white;
             border: none;
-            padding: 12px 24px;
+            padding: 12px 20px;
             border-radius: 6px;
             font-size: 1rem;
             cursor: pointer;
             font-weight: bold;
             transition: background 0.2s;
-            width: 100%;
         }
         button:hover { background: #2980b9; }
         button:active { background: #1f618d; }
+        #enableSensorsBtn { background: #9b59b6; }
+        #enableSensorsBtn:hover { background: #8e44ad; }
         
         #status {
             margin-bottom: 10px;
@@ -120,7 +140,6 @@
         <canvas id="canvasOutput" width="640" height="480"></canvas>
     </div>
 
-    <!-- New Hardware Controls -->
     <div class="hw-controls">
         <select id="cameraSelect"></select>
         <div id="zoomContainer">
@@ -129,50 +148,136 @@
         </div>
     </div>
 
-    <div class="hud">
-        <div class="metric">
-            <span class="label">Relative Azimuth</span>
-            <span class="value" id="azimuthVal">0.0</span>
+    <div class="hud-container">
+        <!-- Optical Flow HUD -->
+        <div class="hud-panel">
+            <div class="panel-title">Optical (Pixels)</div>
+            <div class="metric">
+                <span class="label">Azimuth (Yaw)</span>
+                <span class="value" id="optAzimuthVal">0.0</span>
+            </div>
+            <div class="metric">
+                <span class="label">Elevation (Pitch)</span>
+                <span class="value" id="optElevationVal">0.0</span>
+            </div>
         </div>
-        <div class="metric">
-            <span class="label">Relative Elevation</span>
-            <span class="value" id="elevationVal">0.0</span>
+
+        <!-- Hardware Sensor HUD -->
+        <div class="hud-panel">
+            <div class="panel-title">Sensor (Degrees)</div>
+            <div class="metric">
+                <span class="label">Azimuth (Yaw)</span>
+                <span class="value" id="sensAzimuthVal">0.0°</span>
+            </div>
+            <div class="metric">
+                <span class="label">Elevation (Pitch)</span>
+                <span class="value" id="sensElevationVal">0.0°</span>
+            </div>
         </div>
     </div>
 
     <div class="controls">
-        <button id="zeroBtn">Zero Position</button>
+        <button id="enableSensorsBtn">1. Enable Sensors</button>
+        <button id="zeroBtn">2. Zero Position</button>
     </div>
 
     <script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="onOpenCvReady();" type="text/javascript"></script>
 
     <script>
+        // DOM Elements
         let video = document.getElementById('videoInput');
         let canvas = document.getElementById('canvasOutput');
-        let ctx = canvas.getContext('2d');
-        
-        let azimuthVal = document.getElementById('azimuthVal');
-        let elevationVal = document.getElementById('elevationVal');
         let statusDiv = document.getElementById('status');
+        
+        let optAzimuthVal = document.getElementById('optAzimuthVal');
+        let optElevationVal = document.getElementById('optElevationVal');
+        let sensAzimuthVal = document.getElementById('sensAzimuthVal');
+        let sensElevationVal = document.getElementById('sensElevationVal');
+        
         let zeroBtn = document.getElementById('zeroBtn');
+        let enableSensorsBtn = document.getElementById('enableSensorsBtn');
 
+        // State Variables
         let currentStream = null;
         let videoTrack = null;
         let trackingStarted = false;
         let resetTracking = false;
 
-        let azimuth = 0;
-        let elevation = 0;
+        // Optical Variables
+        let optAzimuth = 0;
+        let optElevation = 0;
 
-        // Zero button event listener
-        zeroBtn.addEventListener('click', () => {
-            azimuth = 0;
-            elevation = 0;
-            azimuthVal.innerText = "0.0";
-            elevationVal.innerText = "0.0";
+        // Sensor Variables
+        let rawSensAzimuth = 0;
+        let rawSensElevation = 0;
+        let sensAzimuthOffset = 0;
+        let sensElevationOffset = 0;
+
+        // --- SENSOR LOGIC ---
+        
+        // Convert any angle into a strict -180 to +180 relative range
+        function normalizeRelativeAngle(rawAngle, offset) {
+            let diff = rawAngle - offset;
+            while (diff > 180) diff -= 360;
+            while (diff < -180) diff += 360;
+            return diff;
+        }
+
+        function handleOrientation(event) {
+            if (event.alpha === null || event.beta === null) return;
             
+            rawSensAzimuth = event.alpha; // 0 to 360 compass heading
+            rawSensElevation = event.beta; // -180 to 180 front/back tilt
+
+            // Apply offsets and restrict to +/- 180 range
+            let displayAzimuth = normalizeRelativeAngle(rawSensAzimuth, sensAzimuthOffset);
+            let displayElevation = normalizeRelativeAngle(rawSensElevation, sensElevationOffset);
+
+            // Invert beta (elevation) if necessary to match the visual optical flow direction
+            sensAzimuthVal.innerText = displayAzimuth.toFixed(1) + "°";
+            sensElevationVal.innerText = displayElevation.toFixed(1) + "°";
+        }
+
+        enableSensorsBtn.addEventListener('click', () => {
+            if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+                // iOS 13+ requires explicit permission request
+                DeviceOrientationEvent.requestPermission()
+                    .then(permissionState => {
+                        if (permissionState === 'granted') {
+                            window.addEventListener('deviceorientation', handleOrientation);
+                            enableSensorsBtn.style.display = 'none';
+                        } else {
+                            alert("Sensor permission denied.");
+                        }
+                    })
+                    .catch(console.error);
+            } else {
+                // Non-iOS devices
+                window.addEventListener('deviceorientation', handleOrientation);
+                enableSensorsBtn.style.display = 'none';
+            }
+        });
+
+        // --- ZEROING LOGIC ---
+        
+        zeroBtn.addEventListener('click', () => {
+            // Zero Optical Flow
+            optAzimuth = 0;
+            optElevation = 0;
+            optAzimuthVal.innerText = "0.0";
+            optElevationVal.innerText = "0.0";
+            
+            // Zero Hardware Sensors
+            sensAzimuthOffset = rawSensAzimuth;
+            sensElevationOffset = rawSensElevation;
+            
+            // Re-render sensors immediately to show 0.0
+            sensAzimuthVal.innerText = "0.0°";
+            sensElevationVal.innerText = "0.0°";
+            
+            // Button visual feedback
             let originalText = zeroBtn.innerText;
-            zeroBtn.innerText = "Position Zeroed!";
+            zeroBtn.innerText = "Zeroed!";
             zeroBtn.style.background = "#2ecc71";
             setTimeout(() => {
                 zeroBtn.innerText = originalText;
@@ -180,15 +285,15 @@
             }, 1000);
         });
 
+        // --- CAMERA & OPENCV LOGIC ---
+
         function onOpenCvReady() {
-            statusDiv.innerText = "Requesting initial permissions...";
+            statusDiv.innerText = "Requesting camera permissions...";
             getCameras();
         }
 
-        // 1. Get list of available cameras
         async function getCameras() {
             try {
-                // Request blind permission first to unlock the real hardware labels
                 let initialStream = await navigator.mediaDevices.getUserMedia({ video: true });
                 initialStream.getTracks().forEach(t => t.stop());
             } catch (err) {
@@ -201,7 +306,6 @@
                 let devices = await navigator.mediaDevices.enumerateDevices();
                 let videoDevices = devices.filter(d => d.kind === 'videoinput');
                 let cameraSelect = document.getElementById('cameraSelect');
-                cameraSelect.innerHTML = '';
                 
                 videoDevices.forEach((device, index) => {
                     let option = document.createElement('option');
@@ -210,13 +314,9 @@
                     cameraSelect.appendChild(option);
                 });
 
-                // When user picks a new camera, restart the stream
-                cameraSelect.onchange = () => {
-                    startCamera(cameraSelect.value);
-                };
+                cameraSelect.onchange = () => { startCamera(cameraSelect.value); };
 
                 if (videoDevices.length > 0) {
-                    // Try to default to a rear-facing camera if one exists
                     let backCamera = videoDevices.find(d => d.label.toLowerCase().includes('back'));
                     let defaultDevice = backCamera || videoDevices[0];
                     cameraSelect.value = defaultDevice.deviceId;
@@ -229,9 +329,7 @@
             }
         }
 
-        // 2. Boot the selected camera and inject hardware constraints
         async function startCamera(deviceId) {
-            // Kill existing stream if we are hot-swapping
             if (currentStream) {
                 currentStream.getTracks().forEach(t => t.stop());
             }
@@ -243,42 +341,33 @@
                 });
                 video.srcObject = currentStream;
                 video.play();
-                
                 videoTrack = currentStream.getVideoTracks()[0];
                 
-                // Set up the hardware zoom slider
+                // Hardware Zoom Setup
                 let zoomContainer = document.getElementById('zoomContainer');
                 let zoomSlider = document.getElementById('zoomSlider');
-                
                 try {
                     let capabilities = videoTrack.getCapabilities();
                     let settings = videoTrack.getSettings();
-                    
                     if (capabilities && 'zoom' in capabilities) {
                         zoomSlider.min = capabilities.zoom.min;
                         zoomSlider.max = capabilities.zoom.max;
                         zoomSlider.step = capabilities.zoom.step;
                         zoomSlider.value = settings.zoom || 1;
-                        zoomContainer.style.display = 'flex'; // Reveal the slider
-                        
+                        zoomContainer.style.display = 'flex';
                         zoomSlider.oninput = async (e) => {
                             try {
-                                await videoTrack.applyConstraints({
-                                    advanced: [{ zoom: parseFloat(e.target.value) }]
-                                });
-                            } catch(err) { console.warn("Zoom error:", err); }
+                                await videoTrack.applyConstraints({ advanced: [{ zoom: parseFloat(e.target.value) }] });
+                            } catch(err) {}
                         };
                     } else {
                         zoomContainer.style.display = 'none';
                     }
-                } catch(e) {
-                    zoomContainer.style.display = 'none';
-                }
+                } catch(e) { zoomContainer.style.display = 'none'; }
 
-                statusDiv.innerText = "Tracking Initialized";
+                statusDiv.innerText = "Tracking Ready. Press 'Enable Sensors' to begin comparison.";
                 statusDiv.style.color = "#2ecc71";
                 
-                // Tell the CV loop to dump old tracking points, we have a new lens
                 resetTracking = true;
 
                 if (!trackingStarted) {
@@ -295,10 +384,8 @@
             }
         }
 
-        // 3. The OpenCV Tracking Loop
         function startProcessing() {
             let cap = new cv.VideoCapture(video);
-            
             let oldFrame = new cv.Mat(video.height, video.width, cv.CV_8UC4);
             let oldGray = new cv.Mat();
             let newFrame = new cv.Mat(video.height, video.width, cv.CV_8UC4);
@@ -318,7 +405,6 @@
             let winSize = new cv.Size(15, 15);
             let maxLevel = 2;
             let criteria = new cv.TermCriteria(cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, 10, 0.03);
-            
             let color = new cv.Scalar(0, 255, 0, 255);
             const FPS = 30;
 
@@ -329,16 +415,13 @@
                         return;
                     }
 
-                    // If user swapped cameras, dump the old points and grab a fresh baseline
                     if (resetTracking) {
-                        if (p0 != null) {
-                            try { p0.delete(); } catch(e) {}
-                        }
+                        if (p0 != null) { try { p0.delete(); } catch(e) {} }
                         p0 = new cv.Mat();
-                        azimuth = 0;
-                        elevation = 0;
-                        azimuthVal.innerText = "0.0";
-                        elevationVal.innerText = "0.0";
+                        optAzimuth = 0;
+                        optElevation = 0;
+                        optAzimuthVal.innerText = "0.0";
+                        optElevationVal.innerText = "0.0";
                         
                         cap.read(oldFrame);
                         cv.cvtColor(oldFrame, oldGray, cv.COLOR_RGBA2GRAY);
@@ -356,10 +439,7 @@
                         cv.calcOpticalFlowPyrLK(oldGray, newGray, p0, p1, st, err, winSize, maxLevel, criteria);
 
                         let goodNew = [];
-                        let goodOld = [];
-                        let dxSum = 0;
-                        let dySum = 0;
-                        let pointCount = 0;
+                        let dxSum = 0, dySum = 0, pointCount = 0;
 
                         for (let i = 0; i < st.rows; i++) {
                             if (st.data[i] === 1) {
@@ -369,7 +449,6 @@
                                 let newY = p1.data32F[i * 2 + 1];
 
                                 goodNew.push(new cv.Point(newX, newY));
-                                goodOld.push(new cv.Point(oldX, oldY));
 
                                 dxSum += (oldX - newX);
                                 dySum += (oldY - newY);
@@ -380,11 +459,11 @@
                         }
 
                         if (pointCount > 0) {
-                            azimuth += (dxSum / pointCount);
-                            elevation += (dySum / pointCount);
+                            optAzimuth += (dxSum / pointCount);
+                            optElevation += (dySum / pointCount);
                             
-                            azimuthVal.innerText = azimuth.toFixed(1);
-                            elevationVal.innerText = elevation.toFixed(1);
+                            optAzimuthVal.innerText = optAzimuth.toFixed(1);
+                            optElevationVal.innerText = optElevation.toFixed(1);
                         }
 
                         p0.delete();
@@ -399,10 +478,7 @@
                     newGray.copyTo(oldGray);
                     
                     setTimeout(processVideo, 1000/FPS);
-
-                } catch (err) {
-                    console.error(err);
-                }
+                } catch (err) { console.error(err); }
             }
             setTimeout(processVideo, 0);
         }
