@@ -54,6 +54,33 @@
             font-weight: bold;
             font-variant-numeric: tabular-nums;
         }
+        
+        /* New Hardware Controls */
+        .hw-controls {
+            margin-top: 15px;
+            width: 100%;
+            max-width: 600px;
+            display: flex;
+            gap: 15px;
+        }
+        select {
+            flex: 1;
+            background: #333;
+            color: white;
+            border: none;
+            padding: 10px;
+            border-radius: 6px;
+            font-size: 1rem;
+        }
+        #zoomContainer {
+            display: none; /* Hidden by default until we confirm the camera supports zoom */
+            align-items: center;
+            background: #333;
+            padding: 0 15px;
+            border-radius: 6px;
+            gap: 10px;
+        }
+
         .controls {
             margin-top: 15px;
             width: 100%;
@@ -73,19 +100,15 @@
             transition: background 0.2s;
             width: 100%;
         }
-        button:hover {
-            background: #2980b9;
-        }
-        button:active {
-            background: #1f618d;
-        }
+        button:hover { background: #2980b9; }
+        button:active { background: #1f618d; }
+        
         #status {
             margin-bottom: 10px;
             color: #f39c12;
+            text-align: center;
         }
-        video {
-            display: none;
-        }
+        video { display: none; }
     </style>
 </head>
 <body>
@@ -95,6 +118,15 @@
     <div class="container">
         <video id="videoInput" width="640" height="480" autoplay playsinline></video>
         <canvas id="canvasOutput" width="640" height="480"></canvas>
+    </div>
+
+    <!-- New Hardware Controls -->
+    <div class="hw-controls">
+        <select id="cameraSelect"></select>
+        <div id="zoomContainer">
+            <label for="zoomSlider">Zoom</label>
+            <input type="range" id="zoomSlider" min="1" max="10" step="0.1" value="1">
+        </div>
     </div>
 
     <div class="hud">
@@ -112,17 +144,22 @@
         <button id="zeroBtn">Zero Position</button>
     </div>
 
-    <!-- Load OpenCV.js asynchronously -->
     <script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="onOpenCvReady();" type="text/javascript"></script>
 
     <script>
         let video = document.getElementById('videoInput');
         let canvas = document.getElementById('canvasOutput');
         let ctx = canvas.getContext('2d');
+        
         let azimuthVal = document.getElementById('azimuthVal');
         let elevationVal = document.getElementById('elevationVal');
         let statusDiv = document.getElementById('status');
         let zeroBtn = document.getElementById('zeroBtn');
+
+        let currentStream = null;
+        let videoTrack = null;
+        let trackingStarted = false;
+        let resetTracking = false;
 
         let azimuth = 0;
         let elevation = 0;
@@ -134,7 +171,6 @@
             azimuthVal.innerText = "0.0";
             elevationVal.innerText = "0.0";
             
-            // Optional: visual feedback on the button
             let originalText = zeroBtn.innerText;
             zeroBtn.innerText = "Position Zeroed!";
             zeroBtn.style.background = "#2ecc71";
@@ -145,22 +181,121 @@
         });
 
         function onOpenCvReady() {
-            statusDiv.innerText = "Requesting camera access...";
-            navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false })
-                .then(function(stream) {
-                    video.srcObject = stream;
-                    video.play();
-                    statusDiv.innerText = "Tracking Initialized";
-                    statusDiv.style.color = "#2ecc71";
-                    
-                    video.addEventListener('canplay', startProcessing, {once: true});
-                })
-                .catch(function(err) {
-                    statusDiv.innerText = "Camera error: " + err;
-                    statusDiv.style.color = "#e74c3c";
-                });
+            statusDiv.innerText = "Requesting initial permissions...";
+            getCameras();
         }
 
+        // 1. Get list of available cameras
+        async function getCameras() {
+            try {
+                // Request blind permission first to unlock the real hardware labels
+                let initialStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                initialStream.getTracks().forEach(t => t.stop());
+            } catch (err) {
+                statusDiv.innerText = "Camera permission denied.";
+                statusDiv.style.color = "#e74c3c";
+                return;
+            }
+
+            try {
+                let devices = await navigator.mediaDevices.enumerateDevices();
+                let videoDevices = devices.filter(d => d.kind === 'videoinput');
+                let cameraSelect = document.getElementById('cameraSelect');
+                cameraSelect.innerHTML = '';
+                
+                videoDevices.forEach((device, index) => {
+                    let option = document.createElement('option');
+                    option.value = device.deviceId;
+                    option.text = device.label || `Camera ${index + 1}`;
+                    cameraSelect.appendChild(option);
+                });
+
+                // When user picks a new camera, restart the stream
+                cameraSelect.onchange = () => {
+                    startCamera(cameraSelect.value);
+                };
+
+                if (videoDevices.length > 0) {
+                    // Try to default to a rear-facing camera if one exists
+                    let backCamera = videoDevices.find(d => d.label.toLowerCase().includes('back'));
+                    let defaultDevice = backCamera || videoDevices[0];
+                    cameraSelect.value = defaultDevice.deviceId;
+                    startCamera(defaultDevice.deviceId);
+                } else {
+                    statusDiv.innerText = "No cameras found.";
+                }
+            } catch(err) {
+                statusDiv.innerText = "Error listing cameras: " + err;
+            }
+        }
+
+        // 2. Boot the selected camera and inject hardware constraints
+        async function startCamera(deviceId) {
+            // Kill existing stream if we are hot-swapping
+            if (currentStream) {
+                currentStream.getTracks().forEach(t => t.stop());
+            }
+
+            try {
+                currentStream = await navigator.mediaDevices.getUserMedia({
+                    video: { deviceId: { exact: deviceId } },
+                    audio: false
+                });
+                video.srcObject = currentStream;
+                video.play();
+                
+                videoTrack = currentStream.getVideoTracks()[0];
+                
+                // Set up the hardware zoom slider
+                let zoomContainer = document.getElementById('zoomContainer');
+                let zoomSlider = document.getElementById('zoomSlider');
+                
+                try {
+                    let capabilities = videoTrack.getCapabilities();
+                    let settings = videoTrack.getSettings();
+                    
+                    if (capabilities && 'zoom' in capabilities) {
+                        zoomSlider.min = capabilities.zoom.min;
+                        zoomSlider.max = capabilities.zoom.max;
+                        zoomSlider.step = capabilities.zoom.step;
+                        zoomSlider.value = settings.zoom || 1;
+                        zoomContainer.style.display = 'flex'; // Reveal the slider
+                        
+                        zoomSlider.oninput = async (e) => {
+                            try {
+                                await videoTrack.applyConstraints({
+                                    advanced: [{ zoom: parseFloat(e.target.value) }]
+                                });
+                            } catch(err) { console.warn("Zoom error:", err); }
+                        };
+                    } else {
+                        zoomContainer.style.display = 'none';
+                    }
+                } catch(e) {
+                    zoomContainer.style.display = 'none';
+                }
+
+                statusDiv.innerText = "Tracking Initialized";
+                statusDiv.style.color = "#2ecc71";
+                
+                // Tell the CV loop to dump old tracking points, we have a new lens
+                resetTracking = true;
+
+                if (!trackingStarted) {
+                    video.addEventListener('canplay', () => {
+                        if (!trackingStarted) {
+                            startProcessing();
+                            trackingStarted = true;
+                        }
+                    }, {once: true});
+                }
+            } catch (err) {
+                statusDiv.innerText = "Error starting camera: " + err;
+                statusDiv.style.color = "#e74c3c";
+            }
+        }
+
+        // 3. The OpenCV Tracking Loop
         function startProcessing() {
             let cap = new cv.VideoCapture(video);
             
@@ -185,17 +320,29 @@
             let criteria = new cv.TermCriteria(cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, 10, 0.03);
             
             let color = new cv.Scalar(0, 255, 0, 255);
-
-            cap.read(oldFrame);
-            cv.cvtColor(oldFrame, oldGray, cv.COLOR_RGBA2GRAY);
-            cv.goodFeaturesToTrack(oldGray, p0, maxCorners, qualityLevel, minDistance, mask, blockSize);
-
             const FPS = 30;
+
             function processVideo() {
                 try {
                     if (!video.videoWidth) {
                         requestAnimationFrame(processVideo);
                         return;
+                    }
+
+                    // If user swapped cameras, dump the old points and grab a fresh baseline
+                    if (resetTracking) {
+                        if (p0 != null) {
+                            try { p0.delete(); } catch(e) {}
+                        }
+                        p0 = new cv.Mat();
+                        azimuth = 0;
+                        elevation = 0;
+                        azimuthVal.innerText = "0.0";
+                        elevationVal.innerText = "0.0";
+                        
+                        cap.read(oldFrame);
+                        cv.cvtColor(oldFrame, oldGray, cv.COLOR_RGBA2GRAY);
+                        resetTracking = false;
                     }
 
                     cap.read(newFrame);
@@ -257,10 +404,8 @@
                     console.error(err);
                 }
             }
-
             setTimeout(processVideo, 0);
         }
     </script>
 </body>
 </html>
-
