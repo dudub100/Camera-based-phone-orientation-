@@ -28,7 +28,6 @@
             box-shadow: 0 4px 12px rgba(0,0,0,0.5);
         }
         
-        /* Hardware Controls */
         .hw-controls {
             margin-top: 15px;
             width: 100%;
@@ -54,7 +53,6 @@
             gap: 10px;
         }
 
-        /* Split HUD for Optical vs Sensor */
         .hud-container {
             width: 100%;
             max-width: 600px;
@@ -97,7 +95,6 @@
             font-variant-numeric: tabular-nums;
         }
 
-        /* Action Buttons */
         .controls {
             margin-top: 20px;
             width: 100%;
@@ -207,15 +204,8 @@
         let sensAzimuthOffset = 0;
         let sensElevationOffset = 0;
 
-        // --- SENSOR & ORIENTATION LOGIC ---
+        // --- MATRIX SENSOR LOGIC ---
         
-        function getScreenOrientation() {
-            if (screen.orientation && screen.orientation.angle !== undefined) {
-                return screen.orientation.angle;
-            }
-            return window.orientation || 0;
-        }
-
         function normalizeRelativeAngle(rawAngle, offset) {
             let diff = rawAngle - offset;
             while (diff > 180) diff -= 360;
@@ -226,28 +216,34 @@
         function handleOrientation(event) {
             if (event.alpha === null || event.beta === null || event.gamma === null) return;
             
-            let orientation = getScreenOrientation();
-            
-            // Azimuth remains fairly constant relative to Z-axis
-            rawSensAzimuth = event.alpha; 
+            // Convert degrees to radians
+            let deg2rad = Math.PI / 180;
+            let c1 = Math.cos(event.alpha * deg2rad);
+            let s1 = Math.sin(event.alpha * deg2rad);
+            let c2 = Math.cos(event.beta * deg2rad);
+            let s2 = Math.sin(event.beta * deg2rad);
+            let c3 = Math.cos(event.gamma * deg2rad);
+            let s3 = Math.sin(event.gamma * deg2rad);
 
-            // Dynamically map hardware axes to screen axes based on rotation
-            if (orientation === 90) {
-                // Landscape Left: Pitch is now hardware Roll (-gamma)
-                rawSensElevation = -event.gamma;
-            } else if (orientation === -90 || orientation === 270) {
-                // Landscape Right: Pitch is now hardware Roll (+gamma)
-                rawSensElevation = event.gamma;
-            } else if (orientation === 180) {
-                // Upside down Portrait
-                rawSensElevation = -event.beta;
-            } else {
-                // Standard Portrait (0)
-                rawSensElevation = event.beta;
-            }
+            // Construct the W3C device-to-world rotation matrix (Only the Z-axis column)
+            // This mathematically defines the exact vector the back camera is pointing in 3D space
+            let m13 = (c1 * s3) + (c3 * s1 * s2);
+            let m23 = (s1 * s3) - (c1 * c3 * s2);
+            let m33 = c2 * c3;
 
+            // Camera points in the -Z direction
+            let lookX = -m13;
+            let lookY = -m23;
+            let lookZ = -m33;
+
+            // Extract perfect Elevation (Pitch) and Azimuth (Yaw) from the World Vector
+            // This eliminates Gimbal Lock and inherently solves Portrait/Landscape rotations
+            rawSensElevation = Math.asin(lookZ) * (180 / Math.PI); 
+            rawSensAzimuth = Math.atan2(lookX, lookY) * (180 / Math.PI); 
+
+            // Apply offsets for the zero button
             let displayAzimuth = normalizeRelativeAngle(rawSensAzimuth, sensAzimuthOffset);
-            let displayElevation = normalizeRelativeAngle(rawSensElevation, sensElevationOffset);
+            let displayElevation = rawSensElevation - sensElevationOffset;
 
             sensAzimuthVal.innerText = displayAzimuth.toFixed(1) + "°";
             sensElevationVal.innerText = displayElevation.toFixed(1) + "°";
@@ -457,8 +453,11 @@
 
                                 goodNew.push(new cv.Point(newX, newY));
 
+                                // Panning right (Yaw +): pixels move left (oldX > newX)
                                 dxSum += (oldX - newX);
-                                dySum += (oldY - newY);
+                                
+                                // Tilting up (Pitch +): pixels move down (newY > oldY)
+                                dySum += (newY - oldY);
                                 pointCount++;
 
                                 cv.circle(newFrame, new cv.Point(newX, newY), 3, color, -1);
