@@ -78,6 +78,13 @@
             border-bottom: 1px solid #333;
             padding-bottom: 5px;
             margin-bottom: 5px;
+            display: flex;
+            justify-content: space-between;
+        }
+        .live-fov {
+            font-size: 0.7rem;
+            color: #2ecc71;
+            font-weight: normal;
         }
         .metric {
             display: flex;
@@ -147,7 +154,10 @@
 
     <div class="hud-container">
         <div class="hud-panel">
-            <div class="panel-title">Optical (Est. Degrees)</div>
+            <div class="panel-title">
+                Optical (Static Lens)
+                <span class="live-fov" id="fovDisplay">Base HFOV: 65°</span>
+            </div>
             <div class="metric">
                 <span class="label">Azimuth (Yaw)</span>
                 <span class="value" id="optAzimuthVal">0.0°</span>
@@ -187,6 +197,7 @@
         let optElevationVal = document.getElementById('optElevationVal');
         let sensAzimuthVal = document.getElementById('sensAzimuthVal');
         let sensElevationVal = document.getElementById('sensElevationVal');
+        let fovDisplay = document.getElementById('fovDisplay');
         
         let zeroBtn = document.getElementById('zeroBtn');
         let enableSensorsBtn = document.getElementById('enableSensorsBtn');
@@ -198,15 +209,16 @@
 
         let optAzimuth = 0;
         let optElevation = 0;
+        let baseHFOV = 65.0; // Default assumption
 
+        // Raw background hardware states
         let rawSensAzimuth = 0;
         let rawSensElevation = 0;
+        
+        // Zero-offsets for display
         let sensAzimuthOffset = 0;
         let sensElevationOffset = 0;
-
-        // Base estimated Field of View for a standard mobile wide lens
-        const BASE_HFOV = 65.0; 
-        const BASE_VFOV = 51.0; 
+        let allVideoDevices = [];
 
         // --- MATRIX SENSOR LOGIC ---
         function normalizeRelativeAngle(rawAngle, offset) {
@@ -302,10 +314,10 @@
 
             try {
                 let devices = await navigator.mediaDevices.enumerateDevices();
-                let videoDevices = devices.filter(d => d.kind === 'videoinput');
+                allVideoDevices = devices.filter(d => d.kind === 'videoinput');
                 let cameraSelect = document.getElementById('cameraSelect');
                 
-                videoDevices.forEach((device, index) => {
+                allVideoDevices.forEach((device, index) => {
                     let option = document.createElement('option');
                     option.value = device.deviceId;
                     option.text = device.label || `Camera ${index + 1}`;
@@ -314,9 +326,9 @@
 
                 cameraSelect.onchange = () => { startCamera(cameraSelect.value); };
 
-                if (videoDevices.length > 0) {
-                    let backCamera = videoDevices.find(d => d.label.toLowerCase().includes('back'));
-                    let defaultDevice = backCamera || videoDevices[0];
+                if (allVideoDevices.length > 0) {
+                    let backCamera = allVideoDevices.find(d => d.label.toLowerCase().includes('back'));
+                    let defaultDevice = backCamera || allVideoDevices[0];
                     cameraSelect.value = defaultDevice.deviceId;
                     startCamera(defaultDevice.deviceId);
                 } else {
@@ -331,6 +343,20 @@
             if (currentStream) {
                 currentStream.getTracks().forEach(t => t.stop());
             }
+
+            // Sniff camera label to set static FOV guess
+            let selectedDevice = allVideoDevices.find(d => d.deviceId === deviceId);
+            let label = selectedDevice ? selectedDevice.label.toLowerCase() : "";
+            
+            if (label.includes("ultra")) {
+                baseHFOV = 110.0;
+            } else if (label.includes("tele")) {
+                baseHFOV = 30.0;
+            } else {
+                baseHFOV = 65.0; // Standard Wide
+            }
+            
+            fovDisplay.innerText = `Base HFOV: ~${baseHFOV}°`;
 
             try {
                 currentStream = await navigator.mediaDevices.getUserMedia({
@@ -362,7 +388,7 @@
                     }
                 } catch(e) { zoomContainer.style.display = 'none'; }
 
-                statusDiv.innerText = "Tracking Ready. Press 'Enable Sensors' to begin.";
+                statusDiv.innerText = "Tracking Ready.";
                 statusDiv.style.color = "#2ecc71";
                 
                 resetTracking = true;
@@ -447,6 +473,7 @@
 
                                 goodNew.push(new cv.Point(newX, newY));
 
+                                // Directional Pixel Shift
                                 dxSum += (oldX - newX);
                                 dySum += (newY - oldY);
                                 pointCount++;
@@ -456,28 +483,30 @@
                         }
 
                         if (pointCount > 0) {
-                            // 1. Get average pixel shift
                             let avgPxShiftX = dxSum / pointCount;
                             let avgPxShiftY = dySum / pointCount;
 
-                            // 2. Adjust FOV based on current zoom level
+                            // Calculate mathematical focal length in pixels for square sensors
                             let zoomSlider = document.getElementById('zoomSlider');
                             let currentZoom = parseFloat(zoomSlider ? zoomSlider.value : 1.0) || 1.0;
                             
-                            let effectiveHFOV = BASE_HFOV / currentZoom;
-                            let effectiveVFOV = BASE_VFOV / currentZoom;
+                            // focal_length = (width / 2) / tan(FOV / 2)
+                            let f_px_base = (video.videoWidth / 2) / Math.tan((baseHFOV / 2) * (Math.PI / 180));
+                            
+                            // Apply hardware zoom to focal length
+                            let f_px = f_px_base * currentZoom;
+                            
+                            // Unified Degrees-Per-Pixel applied to both X and Y
+                            let degPerPixel = (180 / Math.PI) / f_px;
 
-                            // 3. Convert Pixels to Degrees
-                            let degPerPixelX = effectiveHFOV / video.videoWidth;
-                            let degPerPixelY = effectiveVFOV / video.videoHeight;
-
-                            optAzimuth += (avgPxShiftX * degPerPixelX);
-                            optElevation += (avgPxShiftY * degPerPixelY);
+                            optAzimuth += (avgPxShiftX * degPerPixel);
+                            optElevation += (avgPxShiftY * degPerPixel);
                             
                             optAzimuthVal.innerText = optAzimuth.toFixed(1) + "°";
                             optElevationVal.innerText = optElevation.toFixed(1) + "°";
                         }
 
+                        // Rebuild array for next frame
                         p0.delete();
                         p0 = new cv.Mat(goodNew.length, 1, cv.CV_32FC2);
                         for (let i = 0; i < goodNew.length; i++) {
