@@ -149,7 +149,6 @@
     </div>
 
     <div class="hud-container">
-        <!-- Optical Flow HUD -->
         <div class="hud-panel">
             <div class="panel-title">Optical (Pixels)</div>
             <div class="metric">
@@ -162,7 +161,6 @@
             </div>
         </div>
 
-        <!-- Hardware Sensor HUD -->
         <div class="hud-panel">
             <div class="panel-title">Sensor (Degrees)</div>
             <div class="metric">
@@ -184,7 +182,6 @@
     <script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="onOpenCvReady();" type="text/javascript"></script>
 
     <script>
-        // DOM Elements
         let video = document.getElementById('videoInput');
         let canvas = document.getElementById('canvasOutput');
         let statusDiv = document.getElementById('status');
@@ -197,25 +194,28 @@
         let zeroBtn = document.getElementById('zeroBtn');
         let enableSensorsBtn = document.getElementById('enableSensorsBtn');
 
-        // State Variables
         let currentStream = null;
         let videoTrack = null;
         let trackingStarted = false;
         let resetTracking = false;
 
-        // Optical Variables
         let optAzimuth = 0;
         let optElevation = 0;
 
-        // Sensor Variables
         let rawSensAzimuth = 0;
         let rawSensElevation = 0;
         let sensAzimuthOffset = 0;
         let sensElevationOffset = 0;
 
-        // --- SENSOR LOGIC ---
+        // --- SENSOR & ORIENTATION LOGIC ---
         
-        // Convert any angle into a strict -180 to +180 relative range
+        function getScreenOrientation() {
+            if (screen.orientation && screen.orientation.angle !== undefined) {
+                return screen.orientation.angle;
+            }
+            return window.orientation || 0;
+        }
+
         function normalizeRelativeAngle(rawAngle, offset) {
             let diff = rawAngle - offset;
             while (diff > 180) diff -= 360;
@@ -224,23 +224,37 @@
         }
 
         function handleOrientation(event) {
-            if (event.alpha === null || event.beta === null) return;
+            if (event.alpha === null || event.beta === null || event.gamma === null) return;
             
-            rawSensAzimuth = event.alpha; // 0 to 360 compass heading
-            rawSensElevation = event.beta; // -180 to 180 front/back tilt
+            let orientation = getScreenOrientation();
+            
+            // Azimuth remains fairly constant relative to Z-axis
+            rawSensAzimuth = event.alpha; 
 
-            // Apply offsets and restrict to +/- 180 range
+            // Dynamically map hardware axes to screen axes based on rotation
+            if (orientation === 90) {
+                // Landscape Left: Pitch is now hardware Roll (-gamma)
+                rawSensElevation = -event.gamma;
+            } else if (orientation === -90 || orientation === 270) {
+                // Landscape Right: Pitch is now hardware Roll (+gamma)
+                rawSensElevation = event.gamma;
+            } else if (orientation === 180) {
+                // Upside down Portrait
+                rawSensElevation = -event.beta;
+            } else {
+                // Standard Portrait (0)
+                rawSensElevation = event.beta;
+            }
+
             let displayAzimuth = normalizeRelativeAngle(rawSensAzimuth, sensAzimuthOffset);
             let displayElevation = normalizeRelativeAngle(rawSensElevation, sensElevationOffset);
 
-            // Invert beta (elevation) if necessary to match the visual optical flow direction
             sensAzimuthVal.innerText = displayAzimuth.toFixed(1) + "°";
             sensElevationVal.innerText = displayElevation.toFixed(1) + "°";
         }
 
         enableSensorsBtn.addEventListener('click', () => {
             if (typeof DeviceOrientationEvent.requestPermission === 'function') {
-                // iOS 13+ requires explicit permission request
                 DeviceOrientationEvent.requestPermission()
                     .then(permissionState => {
                         if (permissionState === 'granted') {
@@ -249,10 +263,8 @@
                         } else {
                             alert("Sensor permission denied.");
                         }
-                    })
-                    .catch(console.error);
+                    }).catch(console.error);
             } else {
-                // Non-iOS devices
                 window.addEventListener('deviceorientation', handleOrientation);
                 enableSensorsBtn.style.display = 'none';
             }
@@ -261,21 +273,17 @@
         // --- ZEROING LOGIC ---
         
         zeroBtn.addEventListener('click', () => {
-            // Zero Optical Flow
             optAzimuth = 0;
             optElevation = 0;
             optAzimuthVal.innerText = "0.0";
             optElevationVal.innerText = "0.0";
             
-            // Zero Hardware Sensors
             sensAzimuthOffset = rawSensAzimuth;
             sensElevationOffset = rawSensElevation;
             
-            // Re-render sensors immediately to show 0.0
             sensAzimuthVal.innerText = "0.0°";
             sensElevationVal.innerText = "0.0°";
             
-            // Button visual feedback
             let originalText = zeroBtn.innerText;
             zeroBtn.innerText = "Zeroed!";
             zeroBtn.style.background = "#2ecc71";
@@ -343,7 +351,6 @@
                 video.play();
                 videoTrack = currentStream.getVideoTracks()[0];
                 
-                // Hardware Zoom Setup
                 let zoomContainer = document.getElementById('zoomContainer');
                 let zoomSlider = document.getElementById('zoomSlider');
                 try {
@@ -365,7 +372,7 @@
                     }
                 } catch(e) { zoomContainer.style.display = 'none'; }
 
-                statusDiv.innerText = "Tracking Ready. Press 'Enable Sensors' to begin comparison.";
+                statusDiv.innerText = "Tracking Ready. Press 'Enable Sensors' to begin.";
                 statusDiv.style.color = "#2ecc71";
                 
                 resetTracking = true;
