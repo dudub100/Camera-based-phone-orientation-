@@ -29,7 +29,7 @@
             display: flex;
             flex-direction: column;
             width: 100%;
-            max-width: 640px; /* Portrait constraint */
+            max-width: 640px; 
             gap: 20px;
         }
 
@@ -186,7 +186,7 @@
                 height: calc(100vh - 40px);
             }
             .video-section {
-                flex: 2; /* Takes up 2/3 of the screen */
+                flex: 2; 
                 height: 100%;
                 background: transparent;
                 box-shadow: none;
@@ -194,12 +194,12 @@
             canvas {
                 width: 100%;
                 height: 100%;
-                object-fit: contain; /* Ensures video isn't squashed */
+                object-fit: contain; 
                 background: #111;
                 border-radius: 8px;
             }
             .controls-section {
-                flex: 1; /* Takes up 1/3 of the screen */
+                flex: 1; 
                 min-width: 300px;
                 max-width: 400px;
                 overflow-y: auto;
@@ -207,7 +207,7 @@
                 padding-right: 5px;
             }
             .hud-container {
-                grid-template-columns: 1fr; /* Stack panels vertically in sidebar */
+                grid-template-columns: 1fr; 
             }
         }
     </style>
@@ -217,13 +217,10 @@
     <div id="status">Loading OpenCV.js (may take a moment)...</div>
 
     <div class="main-wrapper">
-        
-        <!-- Video & Canvas Section -->
         <div class="video-section">
             <video id="videoInput" autoplay playsinline></video>
             <canvas id="canvasOutput"></canvas>
             
-            <!-- Floating Overlay -->
             <div class="overlay-hud">
                 <div class="overlay-row">
                     <span class="overlay-badge badge-opt">OPT</span>
@@ -236,9 +233,7 @@
             </div>
         </div>
 
-        <!-- Controls & Detailed HUD Section -->
         <div class="controls-section">
-            
             <div class="hw-controls">
                 <select id="cameraSelect"></select>
                 <div id="zoomContainer">
@@ -280,7 +275,6 @@
                 <button id="enableSensorsBtn">Enable Sensors</button>
                 <button id="zeroBtn">Zero Position</button>
             </div>
-
         </div>
     </div>
 
@@ -308,6 +302,7 @@
         let videoTrack = null;
         let trackingStarted = false;
         let resetTracking = false;
+        let wakeLock = null;
 
         let optAzimuth = 0;
         let optElevation = 0;
@@ -318,6 +313,25 @@
         let sensAzimuthOffset = 0;
         let sensElevationOffset = 0;
         let allVideoDevices = [];
+
+        // --- WAKE LOCK API ---
+        async function requestWakeLock() {
+            try {
+                if ('wakeLock' in navigator) {
+                    wakeLock = await navigator.wakeLock.request('screen');
+                    console.log('Screen Wake Lock active');
+                }
+            } catch (err) {
+                console.log(`Wake Lock failed: ${err.message}`);
+            }
+        }
+
+        // Re-request wake lock if user switches tabs and comes back
+        document.addEventListener('visibilitychange', async () => {
+            if (wakeLock !== null && document.visibilityState === 'visible') {
+                await requestWakeLock();
+            }
+        });
 
         // --- MATRIX SENSOR LOGIC ---
         function normalizeRelativeAngle(rawAngle, offset) {
@@ -352,11 +366,9 @@
             let displayAzimuth = normalizeRelativeAngle(rawSensAzimuth, sensAzimuthOffset);
             let displayElevation = rawSensElevation - sensElevationOffset;
 
-            // Update Sidebar
             sensAzimuthVal.innerText = displayAzimuth.toFixed(1) + "°";
             sensElevationVal.innerText = displayElevation.toFixed(1) + "°";
             
-            // Update Overlay
             overlaySens.innerText = `Az: ${displayAzimuth.toFixed(1)}° | El: ${displayElevation.toFixed(1)}°`;
         }
 
@@ -472,6 +484,9 @@
                 video.play();
                 videoTrack = currentStream.getVideoTracks()[0];
                 
+                // Request Wake Lock now that user has engaged with the camera
+                requestWakeLock();
+
                 let zoomContainer = document.getElementById('zoomContainer');
                 let zoomSlider = document.getElementById('zoomSlider');
                 try {
@@ -493,8 +508,7 @@
                     }
                 } catch(e) { zoomContainer.style.display = 'none'; }
 
-                statusDiv.style.display = "none"; // Hide status once successful
-                
+                statusDiv.style.display = "none";
                 resetTracking = true;
 
                 video.onloadedmetadata = () => {
@@ -623,11 +637,8 @@
                             optAzimuth += (avgPxShiftX * degPerPixel);
                             optElevation += (avgPxShiftY * degPerPixel);
                             
-                            // Update Sidebar
                             optAzimuthVal.innerText = optAzimuth.toFixed(1) + "°";
                             optElevationVal.innerText = optElevation.toFixed(1) + "°";
-                            
-                            // Update Overlay
                             overlayOpt.innerText = `Az: ${optAzimuth.toFixed(1)}° | El: ${optElevation.toFixed(1)}°`;
                         }
 
