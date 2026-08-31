@@ -698,10 +698,9 @@
         let rslToggle = document.getElementById('rslToggle');
 
         setInterval(async () => {
-            // BYPASS LOGIC: If the checkbox is off, don't ping the server
             if (!rslToggle.checked) {
                 document.getElementById('rslValue').innerText = "Bypassed (Turn on above)";
-                document.getElementById('rslValue').style.color = "#888"; // Gray
+                document.getElementById('rslValue').style.color = "#888"; 
                 return; 
             }
 
@@ -710,10 +709,10 @@
                 
                 if (!response.ok) throw new Error("Proxy error");
 
-                let data = await response.json();
+                let jsonResponse = await response.json();
                 
-                // Update 'data.rsl' based on how your radio formats its JSON
-                let rsl = data.rsl; 
+                // Dig into the nested JSON arrays to extract the "-85" string
+                let rsl = jsonResponse?.data?.[0]?.values?.[0]?.[0] || "N/A";
                 
                 document.getElementById('rslValue').innerText = rsl + " dBm";
                 document.getElementById('rslValue').style.color = "#2ecc71"; // Green
@@ -721,6 +720,7 @@
             } catch (err) {
                 document.getElementById('rslValue').innerText = "API Error / Unreachable";
                 document.getElementById('rslValue').style.color = "#e74c3c"; // Red
+                console.error("RSL Fetch Error:", err);
             }
         }, 1000);
     </script>
