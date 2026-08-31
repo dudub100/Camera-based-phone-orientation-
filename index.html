@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Visual vs Sensor Alignment</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background: #121212;
+            color: white;
+            margin: 0;
+            padding: 15px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            overflow-x: hidden;
+        }
+        
+        #status {
+            margin-bottom: 10px;
+            color: #f39c12;
+            text-align: center;
+            width: 100%;
+        }
+
+        .main-wrapper {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            max-width: 640px; 
+            gap: 20px;
+        }
+
+        .video-section {
+            position: relative;
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: #222;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+        }
+        canvas {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        video { display: none; }
+
+        .overlay-hud {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0, 0, 0, 0.65);
+            padding: 10px;
+            border-radius: 6px;
+            border: 1px solid rgba(255,255,255,0.15);
+            backdrop-filter: blur(4px);
+            font-family: ui-monospace, monospace;
+            font-size: 0.9rem;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .overlay-row { display: flex; align-items: center; gap: 8px; }
+        .overlay-badge {
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: bold;
+            color: #000;
+        }
+        .badge-opt { background: #2ecc71; }
+        .badge-sns { background: #3498db; }
+        .overlay-data { color: #fff; white-space: nowrap; }
+
+        .controls-section {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            width: 100%;
+        }
+        .hw-controls {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            background: #1e1e1e;
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid #333;
+        }
+        select {
+            width: 100%;
+            background: #333;
+            color: white;
+            border: none;
+            padding: 10px;
+            border-radius: 6px;
+            font-size: 1rem;
+        }
+        .slider-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .slider-row label {
+            font-size: 0.8rem;
+            color: #aaa;
+            width: 60px;
+        }
+        .slider-row input[type=range] {
+            flex: 1;
+        }
+        .checkbox-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 0.9rem;
+            color: #eee;
+        }
+
+        .hud-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+        .hud-panel {
+            background: #1e1e1e;
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid #333;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .panel-title {
+            font-size: 0.8rem;
+            color: #ccc;
+            font-weight: bold;
+            text-transform: uppercase;
+            border-bottom: 1px solid #333;
+            padding-bottom: 5px;
+            display: flex;
+            justify-content: space-between;
+        }
+        .panel-title.opt-title { color: #2ecc71; }
+        .panel-title.sns-title { color: #3498db; }
+        .live-fov {
+            font-size: 0.65rem;
+            color: #888;
+            font-weight: normal;
+        }
+        .metric {
+            display: flex;
+            flex-direction: column;
+        }
+        .label {
+            font-size: 0.75rem;
+            color: #888;
+            text-transform: uppercase;
+        }
+        .value {
+            font-size: 1.2rem;
+            font-weight: bold;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .buttons {
+            display: flex;
+            gap: 10px;
+        }
+        button {
+            flex: 1;
+            background: #3498db;
+            color: white;
+            border: none;
+            padding: 12px;
+            border-radius: 6px;
+            font-size: 1rem;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+        button:active { opacity: 0.8; }
+        #enableSensorsBtn { background: #9b59b6; }
+
+        @media (orientation: landscape) and (min-width: 600px) {
+            body { padding: 10px; }
+            .main-wrapper {
+                flex-direction: row;
+                max-width: 1200px;
+                align-items: flex-start;
+                height: calc(100vh - 40px);
+            }
+            .video-section {
+                flex: 2; 
+                height: 100%;
+                background: transparent;
+                box-shadow: none;
+            }
+            canvas {
+                width: 100%;
+                height: 100%;
+                object-fit: contain; 
+                background: #111;
+                border-radius: 8px;
+            }
+            .controls-section {
+                flex: 1; 
+                min-width: 300px;
+                max-width: 400px;
+                overflow-y: auto;
+                height: 100%;
+                padding-right: 5px;
+            }
+            .hud-container { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="status">Loading OpenCV.js (may take a moment)...</div>
+
+    <div class="main-wrapper">
+        <div class="video-section">
+            <video id="videoInput" autoplay playsinline></video>
+            <canvas id="canvasOutput"></canvas>
+            
+            <div class="overlay-hud">
+                <div class="overlay-row">
+                    <span class="overlay-badge badge-opt">OPT</span>
+                    <span class="overlay-data" id="overlayOpt">Az: 0.0° | El: 0.0°</span>
+                </div>
+                <div class="overlay-row">
+                    <span class="overlay-badge badge-sns">SNS</span>
+                    <span class="overlay-data" id="overlaySens">Az: 0.0° | El: 0.0°</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="controls-section">
+            <div class="hw-controls">
+                <select id="cameraSelect"></select>
+                
+                <div class="slider-row" id="zoomContainer" style="display:none;">
+                    <label for="zoomSlider">Zoom</label>
+                    <input type="range" id="zoomSlider" min="1" max="10" step="0.1" value="1">
+                </div>
+
+                <!-- NEW ROI CONTROLS -->
+                <div class="checkbox-row">
+                    <input type="checkbox" id="roiToggle" checked>
+                    <label for="roiToggle">Enable ROI Mask (Center Only)</label>
+                </div>
+                <div class="slider-row">
+                    <label for="roiSize">ROI Size</label>
+                    <input type="range" id="roiSize" min="10" max="100" step="5" value="50">
+                </div>
+            </div>
+
+            <div class="hud-container">
+                <div class="hud-panel">
+                    <div class="panel-title opt-title">
+                        Optical (w/ RANSAC)
+                        <span class="live-fov" id="fovDisplay">Base: 65°</span>
+                    </div>
+                    <div class="metric">
+                        <span class="label">Azimuth (Yaw)</span>
+                        <span class="value" id="optAzimuthVal">0.0°</span>
+                    </div>
+                    <div class="metric">
+                        <span class="label">Elevation (Pitch)</span>
+                        <span class="value" id="optElevationVal">0.0°</span>
+                    </div>
+                </div>
+
+                <div class="hud-panel">
+                    <div class="panel-title sns-title">Sensors</div>
+                    <div class="metric">
+                        <span class="label">Azimuth (Yaw)</span>
+                        <span class="value" id="sensAzimuthVal">0.0°</span>
+                    </div>
+                    <div class="metric">
+                        <span class="label">Elevation (Pitch)</span>
+                        <span class="value" id="sensElevationVal">0.0°</span>
+                    </div>
+                </div>
+              
+                <div class="hud-panel" style="grid-column: 1 / -1;">
+                      <div class="panel-title" style="color: #f39c12;">Radio Link Status</div>
+                      <div class="metric">
+                          <span class="label">Receive Signal Level (RSL)</span>
+                          <span class="value" id="rslValue" style="color: #888;">Waiting for Pythonista...</span>
+                      </div>
+                </div>
+            </div>
+
+            <div class="buttons">
+                <button id="enableSensorsBtn">Enable Sensors</button>
+                <button id="zeroBtn">Zero Position</button>
+            </div>
+        </div>
+    </div>
+
+    <script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="onOpenCvReady();" type="text/javascript"></script>
+
+    <script>
+        let video = document.getElementById('videoInput');
+        let canvas = document.getElementById('canvasOutput');
+        let statusDiv = document.getElementById('status');
+        
+        let optAzimuthVal = document.getElementById('optAzimuthVal');
+        let optElevationVal = document.getElementById('optElevationVal');
+        let sensAzimuthVal = document.getElementById('sensAzimuthVal');
+        let sensElevationVal = document.getElementById('sensElevationVal');
+        let overlayOpt = document.getElementById('overlayOpt');
+        let overlaySens = document.getElementById('overlaySens');
+        let fovDisplay = document.getElementById('fovDisplay');
+        
+        let zeroBtn = document.getElementById('zeroBtn');
+        let enableSensorsBtn = document.getElementById('enableSensorsBtn');
+        let roiToggle = document.getElementById('roiToggle');
+        let roiSizeSlider = document.getElementById('roiSize');
+
+        let currentStream = null;
+        let videoTrack = null;
+        let trackingStarted = false;
+        let resetTracking = false;
+        let wakeLock = null;
+
+        let optAzimuth = 0;
+        let optElevation = 0;
+        let baseLongEdgeFOV = 65.0; 
+
+        let rawSensAzimuth = 0;
+        let rawSensElevation = 0;
+        let sensAzimuthOffset = 0;
+        let sensElevationOffset = 0;
+        let allVideoDevices = [];
+
+        // Force feature reset when ROI controls change
+        roiToggle.addEventListener('change', () => { resetTracking = true; });
+        roiSizeSlider.addEventListener('input', () => { resetTracking = true; });
+
+        async function requestWakeLock() {
+            try {
+                if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
+            } catch (err) {}
+        }
+        document.addEventListener('visibilitychange', async () => {
+            if (wakeLock !== null && document.visibilityState === 'visible') await requestWakeLock();
+        });
+
+        // --- SENSOR LOGIC ---
+        function normalizeRelativeAngle(rawAngle, offset) {
+            let diff = rawAngle - offset;
+            while (diff > 180) diff -= 360;
+            while (diff < -180) diff += 360;
+            return diff;
+        }
+
+        function handleOrientation(event) {
+            if (event.alpha === null || event.beta === null || event.gamma === null) return;
+            let deg2rad = Math.PI / 180;
+            let c1 = Math.cos(event.alpha * deg2rad), s1 = Math.sin(event.alpha * deg2rad);
+            let c2 = Math.cos(event.beta * deg2rad), s2 = Math.sin(event.beta * deg2rad);
+            let c3 = Math.cos(event.gamma * deg2rad), s3 = Math.sin(event.gamma * deg2rad);
+
+            let m13 = (c1 * s3) + (c3 * s1 * s2);
+            let m23 = (s1 * s3) - (c1 * c3 * s2);
+            let m33 = c2 * c3;
+
+            rawSensElevation = Math.asin(-m33) * (180 / Math.PI); 
+            rawSensAzimuth = Math.atan2(-m13, -m23) * (180 / Math.PI); 
+
+            let displayAzimuth = normalizeRelativeAngle(rawSensAzimuth, sensAzimuthOffset);
+            let displayElevation = rawSensElevation - sensElevationOffset;
+
+            sensAzimuthVal.innerText = displayAzimuth.toFixed(1) + "°";
+            sensElevationVal.innerText = displayElevation.toFixed(1) + "°";
+            overlaySens.innerText = `Az: ${displayAzimuth.toFixed(1)}° | El: ${displayElevation.toFixed(1)}°`;
+        }
+
+        enableSensorsBtn.addEventListener('click', () => {
+            if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+                DeviceOrientationEvent.requestPermission()
+                    .then(permissionState => {
+                        if (permissionState === 'granted') {
+                            window.addEventListener('deviceorientation', handleOrientation);
+                            enableSensorsBtn.style.display = 'none';
+                        }
+                    }).catch(console.error);
+            } else {
+                window.addEventListener('deviceorientation', handleOrientation);
+                enableSensorsBtn.style.display = 'none';
+            }
+        });
+
+        // --- ZERO LOGIC ---
+        zeroBtn.addEventListener('click', () => {
+            optAzimuth = 0; optElevation = 0;
+            optAzimuthVal.innerText = "0.0°"; optElevationVal.innerText = "0.0°";
+            overlayOpt.innerText = "Az: 0.0° | El: 0.0°";
+            
+            sensAzimuthOffset = rawSensAzimuth; sensElevationOffset = rawSensElevation;
+            sensAzimuthVal.innerText = "0.0°"; sensElevationVal.innerText = "0.0°";
+            overlaySens.innerText = "Az: 0.0° | El: 0.0°";
+            
+            let originalText = zeroBtn.innerText;
+            zeroBtn.innerText = "Zeroed!";
+            zeroBtn.style.background = "#2ecc71";
+            setTimeout(() => {
+                zeroBtn.innerText = originalText;
+                zeroBtn.style.background = "#3498db";
+            }, 1000);
+        });
+
+        // --- CAMERA LOGIC ---
+        function onOpenCvReady() {
+            statusDiv.innerText = "Requesting camera permissions...";
+            getCameras();
+        }
+
+        async function getCameras() {
+            try {
+                let initialStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                initialStream.getTracks().forEach(t => t.stop());
+            } catch (err) {
+                statusDiv.innerText = "Camera permission denied.";
+                return;
+            }
+            try {
+                let devices = await navigator.mediaDevices.enumerateDevices();
+                allVideoDevices = devices.filter(d => d.kind === 'videoinput');
+                let cameraSelect = document.getElementById('cameraSelect');
+                allVideoDevices.forEach((device, index) => {
+                    let option = document.createElement('option');
+                    option.value = device.deviceId;
+                    option.text = device.label || `Camera ${index + 1}`;
+                    cameraSelect.appendChild(option);
+                });
+                cameraSelect.onchange = () => { startCamera(cameraSelect.value); };
+
+                if (allVideoDevices.length > 0) {
+                    let backCamera = allVideoDevices.find(d => d.label.toLowerCase().includes('back'));
+                    let defaultDevice = backCamera || allVideoDevices[0];
+                    cameraSelect.value = defaultDevice.deviceId;
+                    startCamera(defaultDevice.deviceId);
+                }
+            } catch(err) { statusDiv.innerText = "Error: " + err; }
+        }
+
+        async function startCamera(deviceId) {
+            if (currentStream) currentStream.getTracks().forEach(t => t.stop());
+
+            let selectedDevice = allVideoDevices.find(d => d.deviceId === deviceId);
+            let label = selectedDevice ? selectedDevice.label.toLowerCase() : "";
+            
+            if (label.includes("ultra")) baseLongEdgeFOV = 110.0;
+            else if (label.includes("tele")) baseLongEdgeFOV = 30.0;
+            else baseLongEdgeFOV = 65.0; 
+            fovDisplay.innerText = `Base: ~${baseLongEdgeFOV}°`;
+
+            try {
+                currentStream = await navigator.mediaDevices.getUserMedia({
+                    video: { deviceId: { exact: deviceId }, width: { ideal: 640 } },
+                    audio: false
+                });
+                video.srcObject = currentStream;
+                video.play();
+                videoTrack = currentStream.getVideoTracks()[0];
+                requestWakeLock();
+
+                let zoomContainer = document.getElementById('zoomContainer');
+                let zoomSlider = document.getElementById('zoomSlider');
+                try {
+                    let capabilities = videoTrack.getCapabilities();
+                    let settings = videoTrack.getSettings();
+                    if (capabilities && 'zoom' in capabilities) {
+                        zoomSlider.min = capabilities.zoom.min;
+                        zoomSlider.max = capabilities.zoom.max;
+                        zoomSlider.step = capabilities.zoom.step;
+                        zoomSlider.value = settings.zoom || 1;
+                        zoomContainer.style.display = 'flex';
+                        zoomSlider.oninput = async (e) => {
+                            try { await videoTrack.applyConstraints({ advanced: [{ zoom: parseFloat(e.target.value) }] }); } catch(err) {}
+                        };
+                    } else zoomContainer.style.display = 'none';
+                } catch(e) { zoomContainer.style.display = 'none'; }
+
+                statusDiv.style.display = "none";
+                resetTracking = true;
+
+                video.onloadedmetadata = () => {
+                    video.width = video.videoWidth;
+                    video.height = video.videoHeight;
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    if (!trackingStarted) { startProcessing(); trackingStarted = true; }
+                };
+            } catch (err) {}
+        }
+
+        // --- OPENCV PROCESSING LOGIC (RANSAC + ROI) ---
+        function startProcessing() {
+            let cap = new cv.VideoCapture(video);
+            let w = video.width, h = video.height;
+            let oldFrame = new cv.Mat(h, w, cv.CV_8UC4);
+            let oldGray = new cv.Mat();
+            let newFrame = new cv.Mat(h, w, cv.CV_8UC4);
+            let newGray = new cv.Mat();
+            
+            let p0 = new cv.Mat();
+            let p1 = new cv.Mat();
+            let st = new cv.Mat();
+            let err = new cv.Mat();
+            
+            let maxCorners = 100, qualityLevel = 0.3, minDistance = 7, blockSize = 7;
+            let winSize = new cv.Size(15, 15), maxLevel = 2;
+            let criteria = new cv.TermCriteria(cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, 10, 0.03);
+            
+            let colorGreen = new cv.Scalar(0, 255, 0, 255); // Inliers
+            let colorRed = new cv.Scalar(255, 0, 0, 255); // Outliers (RANSAC removed)
+            let colorBlue = new cv.Scalar(0, 150, 255, 255); // ROI Box
+            const FPS = 30;
+
+            function processVideo() {
+                try {
+                    if (!video.videoWidth) { requestAnimationFrame(processVideo); return; }
+
+                    if (newFrame.cols !== video.videoWidth || newFrame.rows !== video.videoHeight) {
+                        video.width = video.videoWidth; video.height = video.videoHeight;
+                        canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+                        w = video.width; h = video.height;
+                        
+                        oldFrame.delete(); newFrame.delete(); oldGray.delete(); newGray.delete();
+                        oldFrame = new cv.Mat(h, w, cv.CV_8UC4);
+                        newFrame = new cv.Mat(h, w, cv.CV_8UC4);
+                        oldGray = new cv.Mat(); newGray = new cv.Mat();
+                        resetTracking = true;
+                    }
+
+                    // --- 1. HANDLE ROI MASK GENERATION ---
+                    let maskMat = new cv.Mat();
+                    let roiRect = null;
+                    if (roiToggle.checked) {
+                        maskMat = cv.Mat.zeros(h, w, cv.CV_8UC1);
+                        let sizePct = parseInt(roiSizeSlider.value) / 100.0;
+                        let rw = Math.floor(w * sizePct);
+                        let rh = Math.floor(h * sizePct);
+                        let rx = Math.floor((w - rw) / 2);
+                        let ry = Math.floor((h - rh) / 2);
+                        roiRect = new cv.Rect(rx, ry, rw, rh);
+                        let roi = maskMat.roi(roiRect);
+                        roi.setTo(new cv.Scalar(255));
+                        roi.delete();
+                    }
+
+                    if (resetTracking) {
+                        if (p0 != null) { try { p0.delete(); } catch(e) {} }
+                        p0 = new cv.Mat();
+                        optAzimuth = 0; optElevation = 0;
+                        optAzimuthVal.innerText = "0.0°"; optElevationVal.innerText = "0.0°";
+                        
+                        cap.read(oldFrame);
+                        cv.cvtColor(oldFrame, oldGray, cv.COLOR_RGBA2GRAY);
+                        resetTracking = false;
+                    }
+
+                    cap.read(newFrame);
+                    cv.cvtColor(newFrame, newGray, cv.COLOR_RGBA2GRAY);
+
+                    // Draw the ROI box on the screen for the user
+                    if (roiToggle.checked && roiRect) {
+                        let pt1 = new cv.Point(roiRect.x, roiRect.y);
+                        let pt2 = new cv.Point(roiRect.x + roiRect.width, roiRect.y + roiRect.height);
+                        cv.rectangle(newFrame, pt1, pt2, colorBlue, 2);
+                    }
+
+                    // --- 2. FIND FEATURES (Using Mask if enabled) ---
+                    if (p0.rows < 20) {
+                        cv.goodFeaturesToTrack(oldGray, p0, maxCorners, qualityLevel, minDistance, maskMat, blockSize);
+                    }
+
+                    if (p0.rows > 0) {
+                        cv.calcOpticalFlowPyrLK(oldGray, newGray, p0, p1, st, err, winSize, maxLevel, criteria);
+
+                        let rawSrc = [];
+                        let rawDst = [];
+
+                        // Collect points that successfully tracked frame-to-frame
+                        for (let i = 0; i < st.rows; i++) {
+                            if (st.data[i] === 1) {
+                                rawSrc.push(p0.data32F[i * 2], p0.data32F[i * 2 + 1]);
+                                rawDst.push(p1.data32F[i * 2], p1.data32F[i * 2 + 1]);
+                            }
+                        }
+
+                        let goodNewPts = [];
+                        let dxSum = 0, dySum = 0, inlierCount = 0;
+
+                        // --- 3. RANSAC OUTLIER REJECTION ---
+                        let numPoints = rawSrc.length / 2;
+                        if (numPoints >= 4) {
+                            // We have enough points to run RANSAC Homography filtering
+                            let srcMat = cv.matFromArray(numPoints, 1, cv.CV_32FC2, rawSrc);
+                            let dstMat = cv.matFromArray(numPoints, 1, cv.CV_32FC2, rawDst);
+                            let ransacMask = new cv.Mat();
+                            
+                            // Find transformation and identify outliers (max 3 pixels of reprojection error allowed)
+                            let H = cv.findHomography(srcMat, dstMat, cv.RANSAC, 3.0, ransacMask);
+
+                            for (let i = 0; i < numPoints; i++) {
+                                let oldX = rawSrc[i * 2], oldY = rawSrc[i * 2 + 1];
+                                let newX = rawDst[i * 2], newY = rawDst[i * 2 + 1];
+                                
+                                // ransacMask.data[i] is 1 for INLIER (background), 0 for OUTLIER (moving object)
+                                if (!H.empty() && ransacMask.data[i] === 1) {
+                                    // INLIER: Keep point for next frame, add to movement math, draw green
+                                    goodNewPts.push(new cv.Point(newX, newY));
+                                    dxSum += (oldX - newX);
+                                    dySum += (newY - oldY);
+                                    inlierCount++;
+                                    cv.circle(newFrame, new cv.Point(newX, newY), 3, colorGreen, -1);
+                                } else {
+                                    // OUTLIER: Do not use in math, do not keep for next frame, draw red
+                                    cv.circle(newFrame, new cv.Point(newX, newY), 4, colorRed, 2);
+                                }
+                            }
+                            srcMat.delete(); dstMat.delete(); H.delete(); ransacMask.delete();
+                        } else {
+                            // Fallback if <4 points: Just use raw average
+                            for (let i = 0; i < numPoints; i++) {
+                                let oldX = rawSrc[i * 2], oldY = rawSrc[i * 2 + 1];
+                                let newX = rawDst[i * 2], newY = rawDst[i * 2 + 1];
+                                goodNewPts.push(new cv.Point(newX, newY));
+                                dxSum += (oldX - newX); dySum += (newY - oldY);
+                                inlierCount++;
+                                cv.circle(newFrame, new cv.Point(newX, newY), 3, colorGreen, -1);
+                            }
+                        }
+
+                        // --- 4. CALCULATE ANGLES ---
+                        if (inlierCount > 0) {
+                            let avgPxShiftX = dxSum / inlierCount;
+                            let avgPxShiftY = dySum / inlierCount;
+
+                            let zoomSlider = document.getElementById('zoomSlider');
+                            let currentZoom = parseFloat(zoomSlider ? zoomSlider.value : 1.0) || 1.0;
+                            
+                            let maxDimension = Math.max(video.width, video.height);
+                            let f_px_base = (maxDimension / 2) / Math.tan((baseLongEdgeFOV / 2) * (Math.PI / 180));
+                            let f_px = f_px_base * currentZoom;
+                            let degPerPixel = (180 / Math.PI) / f_px;
+
+                            optAzimuth += (avgPxShiftX * degPerPixel);
+                            optElevation += (avgPxShiftY * degPerPixel);
+                            
+                            optAzimuthVal.innerText = optAzimuth.toFixed(1) + "°";
+                            optElevationVal.innerText = optElevation.toFixed(1) + "°";
+                            overlayOpt.innerText = `Az: ${optAzimuth.toFixed(1)}° | El: ${optElevation.toFixed(1)}°`;
+                        }
+
+                        // Setup points for next frame
+                        p0.delete();
+                        p0 = new cv.Mat(goodNewPts.length, 1, cv.CV_32FC2);
+                        for (let i = 0; i < goodNewPts.length; i++) {
+                            p0.data32F[i * 2] = goodNewPts[i].x;
+                            p0.data32F[i * 2 + 1] = goodNewPts[i].y;
+                        }
+                    }
+
+                    cv.imshow('canvasOutput', newFrame);
+                    newGray.copyTo(oldGray);
+                    if (maskMat != null && !maskMat.isDeleted()) maskMat.delete();
+                    
+                    setTimeout(processVideo, 1000/FPS);
+                } catch (err) { console.error(err); }
+            }
+            setTimeout(processVideo, 0);
+        }
+    </script>
+</body>
+</html>
