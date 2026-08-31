@@ -684,23 +684,32 @@
             setTimeout(processVideo, 0);
         }
 
+        // --- RADIO REST API POLLING ---
+        let rslToggle = document.getElementById('rslToggle');
+
         setInterval(async () => {
+            // BYPASS LOGIC: If the checkbox is off, don't ping the server
+            if (!rslToggle.checked) {
+                document.getElementById('rslValue').innerText = "Bypassed (Turn on above)";
+                document.getElementById('rslValue').style.color = "#888"; // Gray
+                return; 
+            }
+
             try {
-                // Fetch from the local Python proxy, NOT the radio IP directly
                 let response = await fetch('/api/rsl'); 
                 
                 if (!response.ok) throw new Error("Proxy error");
 
                 let data = await response.json();
                 
-                // UPDATE 'data.rsl' based on how your radio formats its JSON
+                // Update 'data.rsl' based on how your radio formats its JSON
                 let rsl = data.rsl; 
                 
                 document.getElementById('rslValue').innerText = rsl + " dBm";
                 document.getElementById('rslValue').style.color = "#2ecc71"; // Green
 
             } catch (err) {
-                document.getElementById('rslValue').innerText = "API Error";
+                document.getElementById('rslValue').innerText = "API Error / Unreachable";
                 document.getElementById('rslValue').style.color = "#e74c3c"; // Red
             }
         }, 1000);
