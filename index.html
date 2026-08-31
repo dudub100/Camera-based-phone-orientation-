@@ -684,8 +684,12 @@
                     newGray.copyTo(oldGray);
                     if (maskMat != null && !maskMat.isDeleted()) maskMat.delete();
                     
+                } catch (err) { 
+                    console.error(err); 
+                } finally {
+                    // Moving this here guarantees the camera NEVER freezes
                     setTimeout(processVideo, 1000/FPS);
-                } catch (err) { console.error(err); }
+                }
             }
             setTimeout(processVideo, 0);
         }
