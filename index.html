@@ -750,20 +750,23 @@
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
-                animation: false,
+                animation: false, // Turn off animations for real-time performance
                 scales: {
                     x: {
-                        min: -10, // Locked between -10 and 10
+                        type: 'linear', // FORCE MATH AXIS
+                        position: 'bottom',
+                        min: -10, 
                         max: 10,
                         title: { display: true, text: 'Azimuth (°)', color: '#aaa' },
-                        ticks: { color: '#888' },
+                        ticks: { color: '#888' }, 
                         grid: { color: '#333' }
                     },
                     y: {
-                        min: -80, // Locked between -80 and -10
+                        type: 'linear', // FORCE MATH AXIS
+                        min: -80, 
                         max: -10,
                         title: { display: true, text: 'RSL (dBm)', color: '#aaa' },
-                        ticks: { color: '#888' },
+                        ticks: { color: '#888' }, 
                         grid: { color: '#333' }
                     }
                 },
