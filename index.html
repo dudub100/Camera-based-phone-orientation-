@@ -252,16 +252,16 @@
                     <input type="range" id="zoomSlider" min="1" max="10" step="0.1" value="1">
                 </div>
 
-                <!-- NEW ROI CONTROLS -->
+                <!-- ROI CONTROLS -->
                 <div class="checkbox-row">
                     <input type="checkbox" id="roiToggle" checked>
                     <label for="roiToggle">Enable ROI Mask (Center Only)</label>
                 </div>
                     
-                <!-- NEW RSL BYPASS TOGGLE -->
+                <!-- RSL BYPASS TOGGLE -->
                 <div class="checkbox-row">
                     <input type="checkbox" id="rslToggle">
-                    <label for="rslToggle">Enable Radio RSL Polling</label>
+                    <label for="rslToggle" style="color:#f39c12; font-weight:bold;">Enable Live Radio RSL Polling</label>
                 </div>
                 <div class="slider-row">
                     <label for="roiSize">ROI Size</label>
@@ -297,6 +297,7 @@
                     </div>
                 </div>
               
+                <!-- RADIO LINK STATUS -->
                 <div class="hud-panel" style="grid-column: 1 / -1;">
                       <div class="panel-title" style="color: #f39c12;">Radio Link Status</div>
                       <div class="metric">
@@ -305,7 +306,7 @@
                       </div>
                 </div>
 
-                <!-- NEW: Real-Time Graph Panel -->
+                <!-- REAL-TIME GRAPH PANEL -->
                 <div class="hud-panel" style="grid-column: 1 / -1;">
                     <div class="panel-title" style="color: #9b59b6;">
                         Signal Trace
@@ -435,6 +436,12 @@
             sensAzimuthVal.innerText = "0.0°"; sensElevationVal.innerText = "0.0°";
             overlaySens.innerText = "Az: 0.0° | El: 0.0°";
             
+            // Clear chart cleanly on Zero
+            traceDataAz = [];
+            traceDataEl = [];
+            rslChart.data.datasets[0].data = [];
+            rslChart.update();
+
             let originalText = zeroBtn.innerText;
             zeroBtn.innerText = "Zeroed!";
             zeroBtn.style.background = "#2ecc71";
@@ -549,7 +556,7 @@
             let criteria = new cv.TermCriteria(cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, 10, 0.03);
             
             let colorGreen = new cv.Scalar(0, 255, 0, 255); // Inliers
-            let colorRed = new cv.Scalar(255, 0, 0, 255); // Outliers (RANSAC removed)
+            let colorRed = new cv.Scalar(255, 0, 0, 255); // Outliers
             let colorBlue = new cv.Scalar(0, 150, 255, 255); // ROI Box
             const FPS = 30;
 
@@ -599,14 +606,13 @@
                     cap.read(newFrame);
                     cv.cvtColor(newFrame, newGray, cv.COLOR_RGBA2GRAY);
 
-                    // Draw the ROI box on the screen for the user
                     if (roiToggle.checked && roiRect) {
                         let pt1 = new cv.Point(roiRect.x, roiRect.y);
                         let pt2 = new cv.Point(roiRect.x + roiRect.width, roiRect.y + roiRect.height);
                         cv.rectangle(newFrame, pt1, pt2, colorBlue, 2);
                     }
 
-                    // --- 2. FIND FEATURES (Using Mask if enabled) ---
+                    // --- 2. FIND FEATURES ---
                     if (p0.rows < 20) {
                         cv.goodFeaturesToTrack(oldGray, p0, maxCorners, qualityLevel, minDistance, maskMat, blockSize);
                     }
@@ -617,7 +623,6 @@
                         let rawSrc = [];
                         let rawDst = [];
 
-                        // Collect points that successfully tracked frame-to-frame
                         for (let i = 0; i < st.rows; i++) {
                             if (st.data[i] === 1) {
                                 rawSrc.push(p0.data32F[i * 2], p0.data32F[i * 2 + 1]);
@@ -631,34 +636,28 @@
                         // --- 3. RANSAC OUTLIER REJECTION ---
                         let numPoints = rawSrc.length / 2;
                         if (numPoints >= 4) {
-                            // We have enough points to run RANSAC Homography filtering
                             let srcMat = cv.matFromArray(numPoints, 1, cv.CV_32FC2, rawSrc);
                             let dstMat = cv.matFromArray(numPoints, 1, cv.CV_32FC2, rawDst);
                             let ransacMask = new cv.Mat();
                             
-                            // Find transformation and identify outliers (max 3 pixels of reprojection error allowed)
                             let H = cv.findHomography(srcMat, dstMat, cv.RANSAC, 3.0, ransacMask);
 
                             for (let i = 0; i < numPoints; i++) {
                                 let oldX = rawSrc[i * 2], oldY = rawSrc[i * 2 + 1];
                                 let newX = rawDst[i * 2], newY = rawDst[i * 2 + 1];
                                 
-                                // ransacMask.data[i] is 1 for INLIER (background), 0 for OUTLIER (moving object)
                                 if (!H.empty() && ransacMask.data[i] === 1) {
-                                    // INLIER: Keep point for next frame, add to movement math, draw green
                                     goodNewPts.push(new cv.Point(newX, newY));
                                     dxSum += (oldX - newX);
                                     dySum += (newY - oldY);
                                     inlierCount++;
                                     cv.circle(newFrame, new cv.Point(newX, newY), 3, colorGreen, -1);
                                 } else {
-                                    // OUTLIER: Do not use in math, do not keep for next frame, draw red
                                     cv.circle(newFrame, new cv.Point(newX, newY), 4, colorRed, 2);
                                 }
                             }
                             srcMat.delete(); dstMat.delete(); H.delete(); ransacMask.delete();
                         } else {
-                            // Fallback if <4 points: Just use raw average
                             for (let i = 0; i < numPoints; i++) {
                                 let oldX = rawSrc[i * 2], oldY = rawSrc[i * 2 + 1];
                                 let newX = rawDst[i * 2], newY = rawDst[i * 2 + 1];
@@ -690,7 +689,6 @@
                             overlayOpt.innerText = `Az: ${optAzimuth.toFixed(1)}° | El: ${optElevation.toFixed(1)}°`;
                         }
 
-                        // Setup points for next frame
                         p0.delete();
                         p0 = new cv.Mat(goodNewPts.length, 1, cv.CV_32FC2);
                         for (let i = 0; i < goodNewPts.length; i++) {
@@ -706,16 +704,11 @@
                 } catch (err) { 
                     console.error(err); 
                 } finally {
-                    // Moving this here guarantees the camera NEVER freezes
                     setTimeout(processVideo, 1000/FPS);
                 }
             }
             setTimeout(processVideo, 0);
         }
-
-        // --- RADIO REST API POLLING ---
-        let rslToggle = document.getElementById('rslToggle');
-
 
         // --- CHART SETUP ---
         let traceDataAz = [];
@@ -733,7 +726,7 @@
                         data: [],
                         backgroundColor: 'rgba(52, 152, 219, 0.3)',
                         borderColor: 'rgba(52, 152, 219, 0.8)',
-                        showLine: true, // Connects the dots to form a continuous trace
+                        showLine: true,
                         pointRadius: 2,
                         borderWidth: 1.5
                     },
@@ -742,7 +735,7 @@
                         data: [],
                         backgroundColor: '#e74c3c', // Red Dot
                         borderColor: '#fff',
-                        pointRadius: 7, // Large dot for current position
+                        pointRadius: 7,
                         borderWidth: 2
                     }
                 ]
@@ -750,10 +743,10 @@
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
-                animation: false, // Turn off animations for real-time performance
+                animation: false, 
                 scales: {
                     x: {
-                        type: 'linear', // FORCE MATH AXIS
+                        type: 'linear', 
                         position: 'bottom',
                         min: -10, 
                         max: 10,
@@ -762,7 +755,7 @@
                         grid: { color: '#333' }
                     },
                     y: {
-                        type: 'linear', // FORCE MATH AXIS
+                        type: 'linear',
                         min: -80, 
                         max: -10,
                         title: { display: true, text: 'RSL (dBm)', color: '#aaa' },
@@ -781,7 +774,6 @@
             rslChart.update();
         });
 
-        // Toggle X-Axis Label dynamically
         chartAxisSelect.addEventListener('change', (e) => {
             let isAz = e.target.value === 'azimuth';
             rslChart.options.scales.x.title.text = isAz ? 'Azimuth (°)' : 'Elevation (°)';
@@ -789,35 +781,62 @@
         });
 
 
-
+        // --- RADIO REST API & GRAPH POLLING ---
+        let rslToggle = document.getElementById('rslToggle');
         
-
         setInterval(async () => {
+            let rslValue = NaN;
+            let isAz = chartAxisSelect.value === 'azimuth';
+
+            // 1. IF BYPASSED: Generate Fake Data to test the Graph UI
             if (!rslToggle.checked) {
-                document.getElementById('rslValue').innerText = "Bypassed (Turn on above)";
-                document.getElementById('rslValue').style.color = "#888"; 
-                return; 
+                let dist = Math.abs(isAz ? optAzimuth : optElevation);
+                rslValue = -35 - (dist * 4); // Peak at -35, drops as you move away
+                if (rslValue < -80) rslValue = -80;
+                
+                document.getElementById('rslValue').innerText = rslValue.toFixed(1) + " dBm (Simulated)";
+                document.getElementById('rslValue').style.color = "#f39c12"; // Orange
+            } 
+            // 2. IF ENABLED: Fetch Real Data from Python
+            else {
+                try {
+                    let response = await fetch('/api/rsl'); 
+                    if (!response.ok) throw new Error("Proxy error");
+                    
+                    let jsonResponse = await response.json();
+                    let rslString = jsonResponse?.data?.[0]?.values?.[0]?.[0];
+                    rslValue = rslString ? parseFloat(rslString) : NaN;
+                    
+                    if (!isNaN(rslValue)) {
+                        document.getElementById('rslValue').innerText = rslValue + " dBm";
+                        document.getElementById('rslValue').style.color = "#2ecc71"; // Green
+                    } else {
+                        throw new Error("Invalid Format");
+                    }
+                } catch (err) {
+                    document.getElementById('rslValue').innerText = "Error / Unreachable";
+                    document.getElementById('rslValue').style.color = "#e74c3c"; // Red
+                    rslValue = NaN; 
+                }
             }
 
-            try {
-                let response = await fetch('/api/rsl'); 
-                
-                if (!response.ok) throw new Error("Proxy error");
+            // 3. UPDATE THE CHART
+            if (!isNaN(rslValue)) {
+                traceDataAz.push({ x: optAzimuth, y: rslValue });
+                traceDataEl.push({ x: optElevation, y: rslValue });
 
-                let jsonResponse = await response.json();
-                
-                // Dig into the nested JSON arrays to extract the "-85" string
-                let rsl = jsonResponse?.data?.[0]?.values?.[0]?.[0] || "N/A";
-                
-                document.getElementById('rslValue').innerText = rsl + " dBm";
-                document.getElementById('rslValue').style.color = "#2ecc71"; // Green
+                // Keep trace memory manageable
+                if (traceDataAz.length > 300) traceDataAz.shift();
+                if (traceDataEl.length > 300) traceDataEl.shift();
 
-            } catch (err) {
-                document.getElementById('rslValue').innerText = "API Error / Unreachable";
-                document.getElementById('rslValue').style.color = "#e74c3c"; // Red
-                console.error("RSL Fetch Error:", err);
+                // Assign data back to the chart using spread syntax to force redraw
+                rslChart.data.datasets[0].data = isAz ? [...traceDataAz] : [...traceDataEl];
+                rslChart.data.datasets[1].data = [{ x: isAz ? optAzimuth : optElevation, y: rslValue }];
+                
+                rslChart.update();
             }
-        }, 1000);
+        }, 500); // Polling every 500ms
+        
     </script>
 </body>
 </html>
