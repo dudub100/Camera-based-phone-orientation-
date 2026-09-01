@@ -220,6 +220,7 @@
             .hud-container { grid-template-columns: 1fr; }
         }
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
 
@@ -302,6 +303,24 @@
                           <span class="label">Receive Signal Level (RSL)</span>
                           <span class="value" id="rslValue" style="color: #888;">Waiting for Pythonista...</span>
                       </div>
+                </div>
+
+                <!-- NEW: Real-Time Graph Panel -->
+                <div class="hud-panel" style="grid-column: 1 / -1;">
+                    <div class="panel-title" style="color: #9b59b6;">
+                        Signal Trace
+                        <select id="chartAxisSelect" style="width: auto; padding: 2px; font-size: 0.7rem; background: #333; color: white; border: none; border-radius: 4px;">
+                            <option value="azimuth">X-Axis: Azimuth</option>
+                            <option value="elevation">X-Axis: Elevation</option>
+                        </select>
+                    </div>
+        
+                    <!-- Canvas for the Graph -->
+                    <div style="position: relative; height: 220px; width: 100%;">
+                        <canvas id="rslChart"></canvas>
+                    </div>
+
+                    <button id="clearChartBtn" style="margin-top: 10px; font-size: 0.8rem; padding: 8px; background: #555;">Clear Trace</button>
                 </div>
             </div>
 
@@ -696,6 +715,75 @@
 
         // --- RADIO REST API POLLING ---
         let rslToggle = document.getElementById('rslToggle');
+
+
+        // --- CHART SETUP ---
+        let traceDataAz = [];
+        let traceDataEl = [];
+        let chartAxisSelect = document.getElementById('chartAxisSelect');
+        let clearChartBtn = document.getElementById('clearChartBtn');
+
+        const ctxChart = document.getElementById('rslChart').getContext('2d');
+        let rslChart = new Chart(ctxChart, {
+            type: 'scatter',
+            data: {
+                datasets: [
+                    {
+                        label: 'Trace',
+                        data: [],
+                        backgroundColor: 'rgba(52, 152, 219, 0.3)',
+                        borderColor: 'rgba(52, 152, 219, 0.8)',
+                        showLine: true, // Connects the historical dots
+                        pointRadius: 2,
+                        borderWidth: 1.5
+                    },
+                    {
+                        label: 'Current Point',
+                        data: [],
+                        backgroundColor: '#e74c3c', // Red Dot
+                        borderColor: '#fff',
+                        pointRadius: 7, // Make it big
+                        borderWidth: 2
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: false, // Turn off animations to save phone battery/CPU
+                scales: {
+                    x: {
+                        title: { display: true, text: 'Azimuth (°)', color: '#aaa' },
+                        ticks: { color: '#888' },
+                        grid: { color: '#333' }
+                    },
+                    y: {
+                        title: { display: true, text: 'RSL (dBm)', color: '#aaa' },
+                        ticks: { color: '#888' },
+                        grid: { color: '#333' }
+                    }
+                },
+                plugins: { legend: { display: false } }
+            }
+        });
+
+        clearChartBtn.addEventListener('click', () => {
+            traceDataAz = [];
+            traceDataEl = [];
+            rslChart.data.datasets[0].data = [];
+            rslChart.update();
+        });
+
+        // Toggle X-Axis Label dynamically
+        chartAxisSelect.addEventListener('change', (e) => {
+            let isAz = e.target.value === 'azimuth';
+            rslChart.options.scales.x.title.text = isAz ? 'Azimuth (°)' : 'Elevation (°)';
+            rslChart.update();
+        });
+
+
+
+        
 
         setInterval(async () => {
             if (!rslToggle.checked) {
