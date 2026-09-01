@@ -357,6 +357,7 @@
         let trackingStarted = false;
         let resetTracking = false;
         let wakeLock = null;
+        let isCameraSwitching = false; // <-- ADD THIS LINE
 
         let optAzimuth = 0;
         let optElevation = 0;
@@ -487,6 +488,7 @@
         }
 
         async function startCamera(deviceId) {
+            isCameraSwitching = true; // <-- Lock the processor
             if (currentStream) currentStream.getTracks().forEach(t => t.stop());
 
             let selectedDevice = allVideoDevices.find(d => d.deviceId === deviceId);
@@ -525,16 +527,23 @@
                 } catch(e) { zoomContainer.style.display = 'none'; }
 
                 statusDiv.style.display = "none";
-                resetTracking = true;
 
-                video.onloadedmetadata = () => {
+                // Wait for the new lens to successfully deliver the first frame
+                video.onloadeddata = () => {
                     video.width = video.videoWidth;
                     video.height = video.videoHeight;
                     canvas.width = video.videoWidth;
                     canvas.height = video.videoHeight;
+                    
+                    resetTracking = true;      // Queue the feature reset
+                    isCameraSwitching = false; // <-- Unlock the processor
+                    
                     if (!trackingStarted) { startProcessing(); trackingStarted = true; }
                 };
-            } catch (err) {}
+            } catch (err) {
+                console.error("Camera Switch Error:", err);
+                isCameraSwitching = false; // Unlock if it fails
+            }
         }
 
         // --- OPENCV PROCESSING LOGIC (RANSAC + ROI) ---
@@ -562,7 +571,10 @@
 
             function processVideo() {
                 try {
-                    if (!video.videoWidth) { requestAnimationFrame(processVideo); return; }
+                    if (isCameraSwitching || video.readyState < 2 || !video.videoWidth) { 
+                        setTimeout(processVideo, 100); 
+                        return; 
+                    }
 
                     if (newFrame.cols !== video.videoWidth || newFrame.rows !== video.videoHeight) {
                         video.width = video.videoWidth; video.height = video.videoHeight;
