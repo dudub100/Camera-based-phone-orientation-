@@ -733,7 +733,7 @@
                         data: [],
                         backgroundColor: 'rgba(52, 152, 219, 0.3)',
                         borderColor: 'rgba(52, 152, 219, 0.8)',
-                        showLine: true, // Connects the historical dots
+                        showLine: true, // Connects the dots to form a continuous trace
                         pointRadius: 2,
                         borderWidth: 1.5
                     },
@@ -742,7 +742,7 @@
                         data: [],
                         backgroundColor: '#e74c3c', // Red Dot
                         borderColor: '#fff',
-                        pointRadius: 7, // Make it big
+                        pointRadius: 7, // Large dot for current position
                         borderWidth: 2
                     }
                 ]
@@ -750,14 +750,18 @@
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
-                animation: false, // Turn off animations to save phone battery/CPU
+                animation: false,
                 scales: {
                     x: {
+                        min: -10, // Locked between -10 and 10
+                        max: 10,
                         title: { display: true, text: 'Azimuth (°)', color: '#aaa' },
                         ticks: { color: '#888' },
                         grid: { color: '#333' }
                     },
                     y: {
+                        min: -80, // Locked between -80 and -10
+                        max: -10,
                         title: { display: true, text: 'RSL (dBm)', color: '#aaa' },
                         ticks: { color: '#888' },
                         grid: { color: '#333' }
