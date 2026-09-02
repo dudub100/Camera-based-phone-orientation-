@@ -813,14 +813,27 @@
 
             if (currentTrace.length === 0) return;
 
+            // 1. Find the maximum RSL in the current trace
+            let maxRsl = -1000;
+            for (let pt of currentTrace) {
+                if (pt.y > maxRsl) maxRsl = pt.y;
+            }
+
+            // 2. Set the threshold cutoff (15 dB below the peak)
+            let dynamicRangeDB = 15;
+            let threshold = maxRsl - dynamicRangeDB;
+
             let sumPower = 0;
             let sumProduct = 0;
             
             for (let pt of currentTrace) {
-                // Convert logarithmic dBm to linear power (mW) for accurate physics weighting
-                let linPower = Math.pow(10, pt.y / 10);
-                sumPower += linPower;
-                sumProduct += (pt.x * linPower);
+                // 3. Only apply math to the points inside the top 15 dB slice of the main lobe
+                if (pt.y > threshold) {
+                    // Convert logarithmic dBm to linear power (mW) for accurate physics weighting
+                    let linPower = Math.pow(10, pt.y / 10);
+                    sumPower += linPower;
+                    sumProduct += (pt.x * linPower);
+                }
             }
             
             if (sumPower > 0) {
@@ -832,6 +845,8 @@
                     { x: lockedCentroidX, y: -10 }
                 ];
                 rslChart.update();
+            } else {
+                alert("Not enough valid peak data to calculate centroid.");
             }
         });
 
