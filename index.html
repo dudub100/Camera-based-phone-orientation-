@@ -187,6 +187,7 @@
         }
         button:active { opacity: 0.8; }
         #enableSensorsBtn { background: #9b59b6; }
+        #calcCentroidBtn { background: #e67e22; }
 
         @media (orientation: landscape) and (min-width: 600px) {
             body { padding: 10px; }
@@ -316,12 +317,15 @@
                         </select>
                     </div>
         
-                    <!-- Canvas for the Graph -->
                     <div style="position: relative; height: 220px; width: 100%;">
                         <canvas id="rslChart"></canvas>
                     </div>
 
-                    <button id="clearChartBtn" style="margin-top: 10px; font-size: 0.8rem; padding: 8px; background: #555;">Clear Trace</button>
+                    <!-- NEW BUTTON LAYOUT -->
+                    <div style="display: flex; gap: 10px; margin-top: 10px;">
+                        <button id="calcCentroidBtn" style="font-size: 0.8rem; padding: 8px; flex: 1;">Calc Centroid</button>
+                        <button id="clearChartBtn" style="font-size: 0.8rem; padding: 8px; background: #555; flex: 1;">Clear Trace</button>
+                    </div>
                 </div>
             </div>
 
@@ -351,13 +355,14 @@
         let enableSensorsBtn = document.getElementById('enableSensorsBtn');
         let roiToggle = document.getElementById('roiToggle');
         let roiSizeSlider = document.getElementById('roiSize');
+        let calcCentroidBtn = document.getElementById('calcCentroidBtn');
 
         let currentStream = null;
         let videoTrack = null;
         let trackingStarted = false;
         let resetTracking = false;
         let wakeLock = null;
-        let isCameraSwitching = false; // <-- ADD THIS LINE
+        let isCameraSwitching = false; // Safety lock for changing lenses
 
         let optAzimuth = 0;
         let optElevation = 0;
@@ -368,6 +373,8 @@
         let sensAzimuthOffset = 0;
         let sensElevationOffset = 0;
         let allVideoDevices = [];
+        
+        let lockedCentroidX = null; // Stores the calculated centroid position
 
         // Force feature reset when ROI controls change
         roiToggle.addEventListener('change', () => { resetTracking = true; });
@@ -437,10 +444,12 @@
             sensAzimuthVal.innerText = "0.0°"; sensElevationVal.innerText = "0.0°";
             overlaySens.innerText = "Az: 0.0° | El: 0.0°";
             
-            // Clear chart cleanly on Zero
+            // Clear chart and centroid on Zero
             traceDataAz = [];
             traceDataEl = [];
+            lockedCentroidX = null;
             rslChart.data.datasets[0].data = [];
+            rslChart.data.datasets[2].data = [];
             rslChart.update();
 
             let originalText = zeroBtn.innerText;
@@ -488,7 +497,7 @@
         }
 
         async function startCamera(deviceId) {
-            isCameraSwitching = true; // <-- Lock the processor
+            isCameraSwitching = true; // Lock processor during lens switch
             if (currentStream) currentStream.getTracks().forEach(t => t.stop());
 
             let selectedDevice = allVideoDevices.find(d => d.deviceId === deviceId);
@@ -528,21 +537,20 @@
 
                 statusDiv.style.display = "none";
 
-                // Wait for the new lens to successfully deliver the first frame
                 video.onloadeddata = () => {
                     video.width = video.videoWidth;
                     video.height = video.videoHeight;
                     canvas.width = video.videoWidth;
                     canvas.height = video.videoHeight;
                     
-                    resetTracking = true;      // Queue the feature reset
-                    isCameraSwitching = false; // <-- Unlock the processor
+                    resetTracking = true;
+                    isCameraSwitching = false; // Unlock processor
                     
                     if (!trackingStarted) { startProcessing(); trackingStarted = true; }
                 };
             } catch (err) {
                 console.error("Camera Switch Error:", err);
-                isCameraSwitching = false; // Unlock if it fails
+                isCameraSwitching = false;
             }
         }
 
@@ -564,16 +572,17 @@
             let winSize = new cv.Size(15, 15), maxLevel = 2;
             let criteria = new cv.TermCriteria(cv.TERM_CRITERIA_EPS | cv.TERM_CRITERIA_COUNT, 10, 0.03);
             
-            let colorGreen = new cv.Scalar(0, 255, 0, 255); // Inliers
-            let colorRed = new cv.Scalar(255, 0, 0, 255); // Outliers
-            let colorBlue = new cv.Scalar(0, 150, 255, 255); // ROI Box
+            let colorGreen = new cv.Scalar(0, 255, 0, 255);
+            let colorRed = new cv.Scalar(255, 0, 0, 255);
+            let colorBlue = new cv.Scalar(0, 150, 255, 255);
             const FPS = 30;
 
             function processVideo() {
                 try {
-                    if (isCameraSwitching || video.readyState < 2 || !video.videoWidth) { 
-                        setTimeout(processVideo, 100); 
-                        return; 
+                    // Safety check: Don't process if camera is swapping or blank
+                    if (isCameraSwitching || video.readyState < 2 || !video.videoWidth) {
+                        setTimeout(processVideo, 100);
+                        return;
                     }
 
                     if (newFrame.cols !== video.videoWidth || newFrame.rows !== video.videoHeight) {
@@ -745,10 +754,19 @@
                     {
                         label: 'Current Point',
                         data: [],
-                        backgroundColor: '#e74c3c', // Red Dot
+                        backgroundColor: '#e74c3c', 
                         borderColor: '#fff',
                         pointRadius: 7,
                         borderWidth: 2
+                    },
+                    {
+                        label: 'Centroid Line',
+                        data: [],
+                        borderColor: '#e74c3c', 
+                        borderDash: [5, 5],     
+                        borderWidth: 2,
+                        showLine: true,
+                        pointRadius: 0          
                     }
                 ]
             },
@@ -760,8 +778,8 @@
                     x: {
                         type: 'linear', 
                         position: 'bottom',
-                        min: -10, 
-                        max: 10,
+                        min: -5, 
+                        max: 5,
                         title: { display: true, text: 'Azimuth (°)', color: '#aaa' },
                         ticks: { color: '#888' }, 
                         grid: { color: '#333' }
@@ -779,16 +797,51 @@
             }
         });
 
+        // --- BUTTON EVENT LISTENERS ---
         clearChartBtn.addEventListener('click', () => {
             traceDataAz = [];
             traceDataEl = [];
+            lockedCentroidX = null;
             rslChart.data.datasets[0].data = [];
+            rslChart.data.datasets[2].data = [];
             rslChart.update();
+        });
+        
+        calcCentroidBtn.addEventListener('click', () => {
+            let isAz = chartAxisSelect.value === 'azimuth';
+            let currentTrace = isAz ? traceDataAz : traceDataEl;
+
+            if (currentTrace.length === 0) return;
+
+            let sumPower = 0;
+            let sumProduct = 0;
+            
+            for (let pt of currentTrace) {
+                // Convert logarithmic dBm to linear power (mW) for accurate physics weighting
+                let linPower = Math.pow(10, pt.y / 10);
+                sumPower += linPower;
+                sumProduct += (pt.x * linPower);
+            }
+            
+            if (sumPower > 0) {
+                lockedCentroidX = sumProduct / sumPower;
+                
+                // Instantly draw the calculated line
+                rslChart.data.datasets[2].data = [
+                    { x: lockedCentroidX, y: -80 },
+                    { x: lockedCentroidX, y: -10 }
+                ];
+                rslChart.update();
+            }
         });
 
         chartAxisSelect.addEventListener('change', (e) => {
             let isAz = e.target.value === 'azimuth';
             rslChart.options.scales.x.title.text = isAz ? 'Azimuth (°)' : 'Elevation (°)';
+            
+            // Clear the centroid line when switching axes to prevent confusion
+            lockedCentroidX = null;
+            rslChart.data.datasets[2].data = [];
             rslChart.update();
         });
 
@@ -807,7 +860,7 @@
                 if (rslValue < -80) rslValue = -80;
                 
                 document.getElementById('rslValue').innerText = rslValue.toFixed(1) + " dBm (Simulated)";
-                document.getElementById('rslValue').style.color = "#f39c12"; // Orange
+                document.getElementById('rslValue').style.color = "#f39c12"; 
             } 
             // 2. IF ENABLED: Fetch Real Data from Python
             else {
@@ -841,9 +894,18 @@
                 if (traceDataAz.length > 300) traceDataAz.shift();
                 if (traceDataEl.length > 300) traceDataEl.shift();
 
-                // Assign data back to the chart using spread syntax to force redraw
                 rslChart.data.datasets[0].data = isAz ? [...traceDataAz] : [...traceDataEl];
                 rslChart.data.datasets[1].data = [{ x: isAz ? optAzimuth : optElevation, y: rslValue }];
+                
+                // Ensure the centroid line stays drawn if it was calculated
+                if (lockedCentroidX !== null) {
+                    rslChart.data.datasets[2].data = [
+                        { x: lockedCentroidX, y: -80 },
+                        { x: lockedCentroidX, y: -10 }
+                    ];
+                } else {
+                    rslChart.data.datasets[2].data = [];
+                }
                 
                 rslChart.update();
             }
